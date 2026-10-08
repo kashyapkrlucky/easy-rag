@@ -4,7 +4,7 @@ A self-hosted, local-first Retrieval-Augmented Generation system for your Markdo
 documents. It runs entirely on your machine — Python, FastAPI, PostgreSQL + pgvector and
 Ollama — with no external SaaS.
 
-> **Status: Phase 0 (design).** The architecture and plan are defined; no code exists yet.
+> **Status: Phase 1 — minimal FastAPI service.** Only a liveness endpoint exists so far.
 > See [ROADMAP.md](ROADMAP.md) for progress.
 
 ## What it will do
@@ -43,6 +43,28 @@ answer, EasyRAG says it doesn't know instead of guessing.
 
 - [ARCHITECTURE.md](ARCHITECTURE.md): components, data flow, data model and design decisions
 - [ROADMAP.md](ROADMAP.md): the phased development plan
+
+## Development
+
+Requirements: [uv](https://docs.astral.sh/uv/) (it installs Python 3.13 if needed).
+
+```bash
+uv sync                                             # create .venv and install dependencies
+cp .env.example .env                                # optional: local configuration
+uv run uvicorn --factory easyrag.main:create_app --reload
+curl http://localhost:8000/health/live              # {"status":"ok"}
+```
+
+Checks (all must pass before committing):
+
+```bash
+uv run ruff format --check .
+uv run ruff check .
+uv run mypy
+uv run pytest
+```
+
+Configuration is read from `EASYRAG_*` environment variables. See [.env.example](.env.example).
 
 ## Note on `./docs`
 

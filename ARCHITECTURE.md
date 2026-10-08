@@ -149,7 +149,7 @@ easy-rag/
 │   │   ├── chunks.py                 (P6)  Chunk, RetrievedChunk
 │   │   └── answers.py                (P13) Answer, Citation, RagTrace
 │   ├── api/
-│   │   ├── dependencies.py           (P1)
+│   │   ├── dependencies.py           (P3)
 │   │   ├── errors.py                 (P3)  domain exception → HTTP mapping
 │   │   ├── schemas.py                (P10)
 │   │   └── routes/
@@ -263,28 +263,39 @@ mypy checks conformance). Signatures below are **design sketches**, finalised in
 class DocumentLoader(Protocol):
     def discover(self) -> Iterable[SourceDocument]: ...
 
+
 class EmbeddingProvider(Protocol):
     @property
-    def model_id(self) -> str: ...          # stored with every vector
+    def model_id(self) -> str: ...  # stored with every vector
     @property
     def dimension(self) -> int: ...
     async def embed_documents(self, texts: Sequence[str]) -> list[list[float]]: ...
     async def embed_query(self, text: str) -> list[float]: ...
 
+
 class VectorStore(Protocol):
-    async def replace_document_chunks(self, document_id: UUID, chunks: Sequence[EmbeddedChunk]) -> None: ...
+    async def replace_document_chunks(
+        self, document_id: UUID, chunks: Sequence[EmbeddedChunk]
+    ) -> None: ...
     async def search(self, vector: Sequence[float], top_k: int) -> list[RetrievedChunk]: ...
+
 
 class Retriever(Protocol):
     async def retrieve(self, query: str, top_k: int) -> list[RetrievedChunk]: ...
 
+
 class Reranker(Protocol):
-    async def rerank(self, query: str, chunks: Sequence[RetrievedChunk], top_n: int) -> list[RetrievedChunk]: ...
+    async def rerank(
+        self, query: str, chunks: Sequence[RetrievedChunk], top_n: int
+    ) -> list[RetrievedChunk]: ...
+
 
 class LLMProvider(Protocol):
     @property
     def model_id(self) -> str: ...
-    async def generate(self, messages: Sequence[ChatMessage], options: GenerationOptions) -> Generation: ...
+    async def generate(
+        self, messages: Sequence[ChatMessage], options: GenerationOptions
+    ) -> Generation: ...
 ```
 
 ### Why these, and not more
@@ -480,9 +491,16 @@ context is still wrapped in clear delimiters, and the prompt states that context
 not instructions. File reads are confined to the docs root: symlinks resolved and checked,
 `..` rejected.
 
-**D23 — Tooling.** Python 3.12, `uv` for dependency management + lockfile, `ruff`
-(lint + format), `mypy --strict`, and `pytest` (+ `pytest-asyncio`, `respx`). These are
-dev tools, not runtime frameworks. CLI uses stdlib `argparse`.
+**D23 — Tooling.** Python 3.13, `uv` for dependency management + lockfile (`uv_build`
+backend, `src/` layout), `ruff` (lint + format), `mypy --strict` with the pydantic plugin,
+and `pytest`. These are dev tools, not runtime frameworks. CLI uses stdlib `argparse`.
+The app is created by a factory (`uvicorn --factory easyrag.main:create_app`), never at
+import time, so importing a module never reads the environment.
+
+*Revised in Phase 1:* Python 3.12 → 3.13 (mature, wheels available for everything
+planned). Starlette 1.7's `TestClient` now uses `httpx2` instead of `httpx`, so `httpx2` is
+the dev dependency. The HTTP client for the Ollama adapters (D3) will be chosen to
+match in Phase 8, along with its mocking tool.
 
 **D24 — Web UI without a JS build chain.** Phase 23 serves static HTML + vanilla JS from
 FastAPI. Node, bundlers and SPA frameworks are not needed for a chat box and a source list.

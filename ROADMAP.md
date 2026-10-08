@@ -32,12 +32,14 @@ Decision references (D1–D24) point to [ARCHITECTURE.md §9](ARCHITECTURE.md#9-
 - **Objective:** agree on architecture, boundaries, decisions and the plan. No code.
 - **Files:** `README.md`, `ARCHITECTURE.md`, `ROADMAP.md`, `.gitignore`
 - **Tests:** none (no code)
+- **Status:** ✅ done
 - **Commit:** `docs: add architecture and development roadmap`
 
 ### Phase 1 — Minimal Python/FastAPI application
 - **Objective:** an installable package with an app factory, typed settings and a liveness endpoint.
-- **Files:** `pyproject.toml`, `uv.lock`, `.env.example`, `src/easyrag/{__init__,main,config}.py`,
-  `src/easyrag/api/{dependencies.py,routes/health.py}`, `src/easyrag/observability/logging.py`, `tests/unit/test_health.py`, `tests/unit/test_config.py`
+- **Files:** `pyproject.toml`, `uv.lock`, `.python-version`, `.env.example`, `src/easyrag/{__init__,main,config}.py`,
+  `src/easyrag/api/routes/health.py`, `src/easyrag/observability/logging.py`, `tests/unit/test_health.py`, `tests/unit/test_config.py`
+- **Status:** ✅ done
 - **Tests:** `GET /health/live` → 200; settings load from env and reject invalid values.
 - **Checks:** `ruff check`, `ruff format --check`, `mypy --strict`, `pytest`
 - **Not yet:** Docker, DB, anything RAG.
@@ -52,7 +54,7 @@ Decision references (D1–D24) point to [ARCHITECTURE.md §9](ARCHITECTURE.md#9-
 ### Phase 3 — PostgreSQL + pgvector
 - **Objective:** add a database service and app connectivity, with readiness reflecting DB health.
 - **Files:** `docker-compose.yml` (pgvector/pgvector image, volume, healthcheck), `storage/database.py`,
-  `container.py`, `api/errors.py`, readiness in `routes/health.py`, integration test scaffold.
+  `container.py`, `api/dependencies.py`, `api/errors.py`, readiness in `routes/health.py`, integration test scaffold.
 - **Tests:** unit test for readiness with a failing DB dependency → 503; integration test pings DB and confirms the `vector` extension is available.
 - **Not yet:** tables.
 - **Commit:** `feat: add PostgreSQL vector database`
