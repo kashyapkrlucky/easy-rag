@@ -1,0 +1,23 @@
+# Keep the build context small and free of secrets.
+.git
+.gitignore
+.dockerignore
+.venv
+**/__pycache__
+**/*.py[cod]
+.pytest_cache
+.mypy_cache
+.ruff_cache
+
+.env
+.env.*
+
+# Not needed in the image: tests, project docs (except README, required by the
+# package metadata) and the user's document corpus (mounted at runtime).
+tests
+docs
+*.md
+!README.md
+
+Dockerfile
+docker-compose*.yml

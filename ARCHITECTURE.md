@@ -505,6 +505,13 @@ match in Phase 8, along with its mocking tool.
 **D24 — Web UI without a JS build chain.** Phase 23 serves static HTML + vanilla JS from
 FastAPI. Node, bundlers and SPA frameworks are not needed for a chat box and a source list.
 
+**D25 — Hardened, minimal container (Phase 2).** A multi-stage build installs locked,
+non-dev dependencies into `/app/.venv`; the runtime stage contains only that venv (no uv,
+no compilers, no tests). The container runs as UID 10001 with a read-only root filesystem,
+all capabilities dropped and `no-new-privileges`. uvicorn is PID 1 (exec-form `CMD`), so
+SIGTERM shuts down gracefully. Compose publishes the API on `127.0.0.1` only until
+authentication exists (Phase 22). Later phases needing writable paths add explicit volumes.
+
 ---
 
 ## 10. API surface (target)

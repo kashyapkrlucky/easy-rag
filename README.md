@@ -4,7 +4,7 @@ A self-hosted, local-first Retrieval-Augmented Generation system for your Markdo
 documents. It runs entirely on your machine — Python, FastAPI, PostgreSQL + pgvector and
 Ollama — with no external SaaS.
 
-> **Status: Phase 1 — minimal FastAPI service.** Only a liveness endpoint exists so far.
+> **Status: Phase 2 — Docker runtime.** Only a liveness endpoint exists so far.
 > See [ROADMAP.md](ROADMAP.md) for progress.
 
 ## What it will do
@@ -43,6 +43,16 @@ answer, EasyRAG says it doesn't know instead of guessing.
 
 - [ARCHITECTURE.md](ARCHITECTURE.md): components, data flow, data model and design decisions
 - [ROADMAP.md](ROADMAP.md): the phased development plan
+
+## Running with Docker
+
+```bash
+docker compose up --build -d
+curl http://localhost:8000/health/live              # {"status":"ok"}
+docker compose down
+```
+
+The API is published on `127.0.0.1` only. Set `EASYRAG_PORT` in `.env` to change the host port.
 
 ## Development
 

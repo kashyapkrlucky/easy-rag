@@ -1,0 +1,20 @@
+name: easyrag
+
+services:
+  app:
+    build: .
+    image: easyrag:local
+    env_file:
+      - path: .env
+        required: false
+    ports:
+      # Published on localhost only: the API has no authentication until it is added.
+      - "127.0.0.1:${EASYRAG_PORT:-8000}:8000"
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true

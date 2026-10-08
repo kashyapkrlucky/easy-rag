@@ -49,6 +49,7 @@ Decision references (D1–D24) point to [ARCHITECTURE.md §9](ARCHITECTURE.md#9-
 - **Objective:** a reproducible container image and a compose file running only the app.
 - **Files:** `Dockerfile` (multi-stage, non-root user, uv), `.dockerignore`, `docker-compose.yml`
 - **Tests:** existing tests pass; manual check of `docker compose up` + `curl /health/live`.
+- **Status:** ✅ done
 - **Commit:** `feat: add Docker runtime`
 
 ### Phase 3 — PostgreSQL + pgvector
