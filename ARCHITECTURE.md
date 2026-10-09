@@ -296,8 +296,10 @@ class Reranker(Protocol):
 class LLMProvider(Protocol):
     @property
     def model_id(self) -> str: ...
+    @property
+    def context_window(self) -> int: ...  # tokens per request; budgeted by the prompt builder
     async def generate(
-        self, messages: Sequence[ChatMessage], options: GenerationOptions
+        self, messages: Sequence[ChatMessage], options: GenerationOptions = DEFAULT_OPTIONS
     ) -> Generation: ...
 ```
 
@@ -351,6 +353,38 @@ Errors are split by how the caller should react:
 BLAKE2b into signed buckets and the result is normalised. Texts that share words really are
 similar, so retrieval and indexing can be tested end-to-end without Ollama. It also records
 its calls, so tests can assert "no embedding calls on an unchanged re-index".
+
+### LLM provider contract (Phase 11)
+
+`llm/base.py` defines:
+- `ChatMessage(role, content)`, with roles `system`, `user` and `assistant`. Grounding relies
+  on a system message the user's question cannot override, so the port speaks roles rather
+  than a single prompt string.
+- `GenerationOptions`: frozen and validated, with `temperature=0.0` and `seed=42` by
+  default (D14), plus `max_output_tokens` and `stop`.
+- `Generation(text, model, finish_reason, prompt_tokens?, completion_tokens?, duration_seconds)`.
+
+Every `LLMProvider` must:
+- accept a non-empty conversation ending with a `user` message, and raise `ValueError`
+  otherwise (shared `validate_messages()`);
+- report `finish_reason="length"` when output was cut off by `max_output_tokens`. The RAG
+  layer must never present a truncated answer as complete;
+- be deterministic with the default options;
+- expose `context_window`, the tokens the model really processes. The Phase 12 adapter
+  sends it explicitly as Ollama's `num_ctx` (D14), and the Phase 13 prompt builder budgets
+  retrieved context against it.
+
+Token counts are optional (`int | None`) because not every backend reports them. They're
+used for observability, never for logic. Errors mirror the embedding port:
+`LLMProviderUnavailableError` (retryable, will map to 503) and `LLMResponseError`.
+Streaming and tool calling are out of scope.
+
+`FakeLLMProvider` is **scriptable**. It takes a queue of replies or exceptions, then a
+`responder(messages)` function, then a default reply. It records every call, so tests can
+assert "the LLM was *not* called". It estimates tokens with `estimate_tokens` and truncates
+to `max_output_tokens` with `finish_reason="length"`. `tests/contracts/llm_provider.py` is the
+shared suite. It was shown to catch non-deterministic providers, ignored output limits and
+invalid conversations being accepted.
 
 ---
 

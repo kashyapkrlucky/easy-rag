@@ -117,9 +117,11 @@ Decision references (D1–D24) point to [ARCHITECTURE.md §9](ARCHITECTURE.md#9-
 - **Commit:** `feat: add vector similarity retrieval`
 
 ### Phase 11 — LLM provider abstraction
-- **Objective:** the `LLMProvider` Protocol, `ChatMessage` / `GenerationOptions` / `Generation` (text + token usage + timing), and a scripted fake.
-- **Files:** `llm/base.py`, `llm/fake.py`
-- **Tests:** fake behaviour; conformance suite.
+- **Objective:** the `LLMProvider` Protocol (with `context_window`), `ChatMessage` / `GenerationOptions` / `Generation` (text, `finish_reason`, optional token usage, timing), and a scriptable fake.
+- **Files:** `llm/base.py`, `llm/fake.py`, `tests/contracts/llm_provider.py`
+- **Tests:** a contract suite (well-formed result, determinism, `length` on output limit, Unicode, invalid conversations), shown to catch three deliberately broken providers. Fake behaviour: script order, scripted exceptions, responder, call log, truncation, stop sequences, token estimates. Option validation.
+- **Not yet:** settings and container wiring (Phase 12, with the Ollama adapter).
+- **Status:** ✅ done
 - **Commit:** `feat: add LLM provider abstraction`
 
 ### Phase 12 — Ollama LLM generation

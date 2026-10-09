@@ -4,7 +4,7 @@ A self-hosted, local-first Retrieval-Augmented Generation system for your Markdo
 documents. It runs entirely on your machine — Python, FastAPI, PostgreSQL + pgvector and
 Ollama — with no external SaaS.
 
-> **Status: Phase 10 — vector retrieval.** Index your documents with `easyrag index`, then search them with `POST /api/v1/retrieve`. Chat (answer generation) is not available yet.
+> **Status: Phase 11 — LLM provider abstraction.** Index your documents with `easyrag index`, then search them with `POST /api/v1/retrieve`. The generation port is defined; chat is not available yet.
 > See [ROADMAP.md](ROADMAP.md) for progress.
 
 ## What it will do
