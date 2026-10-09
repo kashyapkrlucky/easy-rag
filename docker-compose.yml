@@ -63,12 +63,14 @@ services:
     restart: unless-stopped
     # Not published to the host. For development access use docker-compose.dev.yml.
 
-  # One-shot: downloads the embedding model (a no-op when it is already present), then exits.
+  # One-shot: downloads the embedding and chat models (no-ops when already present), then exits.
   ollama-pull:
     image: ollama/ollama:0.34.4
-    entrypoint: ["ollama", "pull", "${EASYRAG_EMBEDDING_MODEL:-nomic-embed-text:v1.5}"]
+    entrypoint: ["/bin/sh", "-c", "ollama pull \"$$EMBEDDING_MODEL\" && ollama pull \"$$LLM_MODEL\""]
     environment:
       OLLAMA_HOST: http://ollama:11434
+      EMBEDDING_MODEL: ${EASYRAG_EMBEDDING_MODEL:-nomic-embed-text:v1.5}
+      LLM_MODEL: ${EASYRAG_LLM_MODEL:-qwen2.5:1.5b-instruct-q4_K_M}
     depends_on:
       ollama:
         condition: service_healthy

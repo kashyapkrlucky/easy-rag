@@ -54,8 +54,16 @@ class Settings(BaseSettings):
     # --- Ollama ------------------------------------------------------------------------
     # Docker Compose sets http://ollama:11434; the default suits `uv run` with a host Ollama.
     ollama_base_url: AnyHttpUrl = AnyHttpUrl("http://localhost:11434")
-    # Generous by default: the first request after startup may have to load the model.
-    ollama_timeout_seconds: float = Field(default=120.0, gt=0, le=3600)
+    # Generous by default: the first request may have to load a model, and CPU-only
+    # generation (e.g. Docker on macOS) of a few hundred tokens can take minutes.
+    ollama_timeout_seconds: float = Field(default=300.0, gt=0, le=3600)
+
+    # --- Chat model ----------------------------------------------------------------------
+    # Pin a tag. Default sized for small machines: ~1 GB, fits a 4 GB Docker VM alongside the
+    # embedding model and PostgreSQL. Larger models answer better but need more memory.
+    llm_model: str = Field(default="qwen2.5:1.5b-instruct-q4_K_M", min_length=1)
+    # Tokens per request (prompt + answer), always sent to Ollama as num_ctx.
+    llm_context_window: int = Field(default=8192, ge=512, le=262144)
 
     # --- Embeddings --------------------------------------------------------------------
     # Pin a tag, not "latest": a silently updated model would change every vector.

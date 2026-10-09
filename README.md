@@ -4,7 +4,7 @@ A self-hosted, local-first Retrieval-Augmented Generation system for your Markdo
 documents. It runs entirely on your machine — Python, FastAPI, PostgreSQL + pgvector and
 Ollama — with no external SaaS.
 
-> **Status: Phase 11 — LLM provider abstraction.** Index your documents with `easyrag index`, then search them with `POST /api/v1/retrieve`. The generation port is defined; chat is not available yet.
+> **Status: Phase 12 — Ollama LLM generation.** Index your documents with `easyrag index`, then search them with `POST /api/v1/retrieve`. The chat model runs in the stack; the chat endpoint arrives in the next phase.
 > See [ROADMAP.md](ROADMAP.md) for progress.
 
 ## What it will do
@@ -56,7 +56,12 @@ docker compose down                                 # add -v to also delete the 
 
 Database migrations are applied automatically each time the app container starts.
 On first start, `ollama-pull` downloads the embedding model (`nomic-embed-text:v1.5`,
-~274 MB). Until it finishes, readiness reports `"embedding_model": "missing"`.
+~274 MB) and the chat model (`qwen2.5:1.5b-instruct-q4_K_M`, ~1 GB). Until they're
+present, readiness reports them as `"missing"`.
+
+**Memory:** the defaults fit a 4 GB Docker VM (Docker Desktop's default on an 8 GB Mac).
+Larger chat models answer better but need more memory: CPU inference needs roughly 1.6×
+the model's size. See `.env.example` for alternatives.
 
 **macOS:** Docker can't use the Apple GPU, so the bundled Ollama runs on CPU (and its image
 is ~4 GB). If you have [Ollama](https://ollama.com) installed natively, it's much faster:

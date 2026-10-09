@@ -140,6 +140,7 @@ easy-rag/
 │   ├── __init__.py                   (P1)
 │   ├── main.py                       (P1)  app factory + lifespan
 │   ├── config.py                     (P1)  Settings (pydantic-settings)
+│   ├── ollama.py                     (P12) shared Ollama HTTP: retries, errors, /api/show
 │   ├── tokens.py                     (P6)  deterministic token estimate
 │   ├── container.py                  (P3)  composition root: builds adapters/services
 │   ├── cli.py                        (P9)  `easyrag index [--rebuild]`, later `eval` (argparse)
@@ -598,6 +599,15 @@ Retrieval ties are broken by chunk ID, and discovery order is sorted by path.
 **`num_ctx` is always set explicitly:** Ollama silently truncates prompts beyond its
 default context window, which would quietly drop retrieved evidence. The prompt builder
 enforces a token budget below `num_ctx`.
+*Phase 12:*
+- `OllamaLLMProvider` always sends `num_ctx = EASYRAG_LLM_CONTEXT_WINDOW` and **refuses** a
+  prompt whose estimated size exceeds it, before sending. On a real 3k-token prompt,
+  `estimate_tokens` was within 1.4% of Ollama's count, and on the safe side.
+- **Honest caveat:** greedy decoding with a fixed seed is deterministic for identical
+  requests with a cold cache. Ollama's prompt-cache reuse can change the computation path,
+  though: the same ~3k-token prompt sent twice produced different answers (88 vs 71 tokens).
+  Determinism of generated text is therefore best-effort. Retrieval, chunking and indexing
+  remain exactly deterministic.
 
 **D15 — Hybrid retrieval stays inside Postgres.** Full-text search (`tsvector`,
 `websearch_to_tsquery`) is fused with vector results by Reciprocal Rank Fusion. No
@@ -668,26 +678,6 @@ errors, is `{"error": {"code", "message", "details"?}}`.
 | SQLAlchemy `DBAPIError` | 503 | `database_unavailable`, with a generic message (the DSN is never returned) |
 | anything else | 500 | `internal_error`, with a generic message; the traceback is logged |
 
-**D27 — Deterministic, index-friendly k-NN query (Phase 10).** pgvector's HNSW index serves
-only a *single* `ORDER BY <distance>` that matches the index expression. A tie-breaker in the
-same query (`ORDER BY distance, id`) silently falls back to a full scan and sort. So
-`storage/vector_store.search_sql`:
-- has an inner query that orders by `embedding::vector(N) <=> CAST(:query AS vector(N))`
-  with `LIMIT k`, which uses the index (verified by `EXPLAIN` on the production SQL);
-- has an outer query that re-sorts by `(distance, chunk_id)`, so equal scores always come
-  back in the same order (tested with identical vectors);
-- applies `min_score` **after** the top-k selection, which predictably means "top k, minus
-  those below the threshold". Filtering inside an approximate index scan can silently
-  return fewer results.
-- filters by `embedding_model` as defence in depth, while the search refuses a mismatched
-  `index_state` with `IndexIncompatibleError`. Vectors from different models are never
-  compared.
-
-Measured on the sample corpus (78 chunks, CPU Ollama in Docker): about 45–50 ms per warm
-request, including the query embedding. On the same corpus, tightly packed scores
-(e.g. 0.685 / 0.681 / 0.679) show the limits of dense-only retrieval with a small model.
-Phases 17–19 (hybrid search, reranking, evaluation) target exactly this.
-
 **D22 — Documents are trusted-ish input.** The corpus is the user's own content, but
 context is still wrapped in clear delimiters, and the prompt states that context text is
 not instructions. File reads are confined to the docs root: symlinks resolved and checked,
@@ -725,6 +715,47 @@ without it, and builds `EASYRAG_DATABASE_URL` from the `POSTGRES_*` variables. T
 the URL as a `SecretStr`. The database is never published by the main compose file;
 `docker-compose.dev.yml` publishes it on `127.0.0.1` for integration tests and `psql`.
 Integration tests run only when `EASYRAG_TEST_DATABASE_URL` is set.
+
+
+**D27 — Deterministic, index-friendly k-NN query (Phase 10).** pgvector's HNSW index serves
+only a *single* `ORDER BY <distance>` that matches the index expression. A tie-breaker in the
+same query (`ORDER BY distance, id`) silently falls back to a full scan and sort. So
+`storage/vector_store.search_sql`:
+- has an inner query that orders by `embedding::vector(N) <=> CAST(:query AS vector(N))`
+  with `LIMIT k`, which uses the index (verified by `EXPLAIN` on the production SQL);
+- has an outer query that re-sorts by `(distance, chunk_id)`, so equal scores always come
+  back in the same order (tested with identical vectors);
+- applies `min_score` **after** the top-k selection, which predictably means "top k, minus
+  those below the threshold". Filtering inside an approximate index scan can silently
+  return fewer results.
+- filters by `embedding_model` as defence in depth, while the search refuses a mismatched
+  `index_state` with `IndexIncompatibleError`. Vectors from different models are never
+  compared.
+
+Measured on the sample corpus (78 chunks, CPU Ollama in Docker): about 45–50 ms per warm
+request, including the query embedding. On the same corpus, tightly packed scores
+(e.g. 0.685 / 0.681 / 0.679) show the limits of dense-only retrieval with a small model.
+Phases 17–19 (hybrid search, reranking, evaluation) target exactly this.
+
+**D28 — The default chat model is sized for small machines (Phase 12).** The first choice,
+`qwen3:4b-instruct-2507` (2.5 GB), was **OOM-killed in a loop** in a 3.9 GB Docker Desktop VM
+(the default on an 8 GB Mac). CPU inference keeps an extra repacked copy of the weights
+(`CPU_REPACK`, about 2.4 GB), which Ollama's own memory estimate leaves out, so the real
+footprint was about 4 GB. With the user's agreement, the default is
+`qwen2.5:1.5b-instruct-q4_K_M`: about 1 GB, Apache-2.0, instruct-tuned with no hidden
+"thinking" tokens, and a 32k native context. Measured: about 1.7 GB for Ollama with both
+models loaded, a 36 s cold first request (model load), and about 30 s for a ~3k-token prompt
+on CPU.
+**Consequence for later phases:** a 1.5B model answered *without* the evidence when the
+supplied context lacked it, inventing a plausible answer. Prompt instructions alone don't
+ground a small model. The evidence gate, citation validation and refusal detection (Phase 14)
+are load-bearing, and Phase 19 must measure faithfulness. Larger models and a native
+(GPU) Ollama remain one setting away (`.env.example`).
+The shared HTTP plumbing now lives in `easyrag/ollama.py` (retries, error parsing,
+`/api/show`). Both adapters translate its neutral errors into their own port's errors.
+Readiness `llm_model` is `missing` until the model is pulled, and `misconfigured` if the
+model's native `context_length` is below the configured window. `ollama-pull` fetches both
+models.
 
 ---
 
@@ -776,13 +807,14 @@ Chat contract (target):
 | `EASYRAG_DOCS_HOST_DIR` (Compose only) | `./docs`, mounted read-only | 9 |
 | `EASYRAG_CHUNK_MAX_TOKENS` / `_OVERLAP_TOKENS` | `400` / `50` | 9 |
 | `EASYRAG_OLLAMA_BASE_URL` | `http://localhost:11434` (Compose: `http://ollama:11434`) | 8 |
-| `EASYRAG_OLLAMA_TIMEOUT_SECONDS` | `120` | 8 |
+| `EASYRAG_OLLAMA_TIMEOUT_SECONDS` | `300` (raised from 120 in P12: CPU generation is slow) | 8 |
 | `EASYRAG_EMBEDDING_MODEL` / `_DIMENSION` | `nomic-embed-text:v1.5` / `768` | 8 |
 | `EASYRAG_EMBEDDING_BATCH_SIZE` | `32` | 8 |
 | `EASYRAG_EMBEDDING_QUERY_PREFIX` / `_DOCUMENT_PREFIX` | `"search_query: "` / `"search_document: "` | 8 |
 | `EASYRAG_RETRIEVAL_TOP_K` | `5` (1–50; requests may override) | 10 |
 | `EASYRAG_RETRIEVAL_MIN_SCORE` | unset (off; requests may override) | 10 / 14 |
-| `EASYRAG_LLM_MODEL`, `_NUM_CTX`, `_TEMPERATURE`, `_SEED` | chosen in P12 / 8192 / 0 / 42 | 12 |
+| `EASYRAG_LLM_MODEL` / `_CONTEXT_WINDOW` | `qwen2.5:1.5b-instruct-q4_K_M` / `8192` | 12 |
+| generation `temperature`, `seed`, `max_output_tokens` | `0` / `42` / set by the RAG service | 13 |
 | `EASYRAG_INDEX_ON_STARTUP` | `true` | 15 |
 | `EASYRAG_WATCH_ENABLED` / `_FORCE_POLLING` | `true` / `false` | 16 |
 | `EASYRAG_API_KEY` | unset (auth off) | 22 |
@@ -824,7 +856,7 @@ The deterministic `FakeEmbeddingProvider` (hash-seeded vectors) and the scripted
 | Question | Phase |
 |---|---|
 | ~~Default embedding model and dimension~~ → `nomic-embed-text:v1.5`, 768: 274 MB, fast on CPU, 8192-token context, documented prefixes; English-centric (alternatives in `.env.example`) | 8 ✅ |
-| Default chat model (instruction-following + citation reliability at small sizes) | 12 |
+| ~~Default chat model~~ → `qwen2.5:1.5b-instruct-q4_K_M` (~1 GB, Apache-2.0, no thinking mode). Chosen for a 4 GB Docker VM; see D28 | 12 ✅ |
 | Similarity threshold default per model | 19 |
 | Reranker implementation (ONNX cross-encoder vs. LLM rerank) | 18 |
 | API key optional vs. required when binding to non-localhost | 22 |

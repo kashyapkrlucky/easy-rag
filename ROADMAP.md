@@ -126,9 +126,11 @@ Decision references (D1–D24) point to [ARCHITECTURE.md §9](ARCHITECTURE.md#9-
 
 ### Phase 12 — Ollama LLM generation
 - **Objective:** an Ollama `/api/chat` adapter with explicit `num_ctx`, temperature, seed, timeouts and token-usage extraction; readiness checks the chat model. (D14)
-- **Files:** `llm/ollama.py`, `docker-compose.yml` (model pull), `container.py`
-- **Tests:** fake Ollama (`httpx2.MockTransport`) for options passthrough, usage parsing and error mapping; opt-in e2e.
-- **Decides:** the default chat model.
+- **Files:** `llm/ollama.py`, `ollama.py` (shared HTTP plumbing, extracted from the embedding adapter), `config.py`, `container.py`, `docker-compose.yml` (pulls both models), `.env.example`, e2e tests.
+- **Tests:** fake Ollama chat (`httpx2.MockTransport`): exact request (`num_ctx` always), option mapping, prompt-overflow refusal, response mapping, `done_reason`, invalid responses, error/retry matrix, readiness states, and the contract suite. The embedding adapter's 34 unchanged tests guard the refactor. E2e with the real model: contract + "answers from supplied context".
+- **Decided:** default chat model `qwen2.5:1.5b-instruct-q4_K_M` (D28; the 4B candidate was OOM-killed in a 4 GB Docker VM).
+- **Not yet (Phase 13):** generation settings (`temperature`, `seed`, `max_output_tokens`) and the HTTP mapping of LLM errors.
+- **Status:** ✅ done
 - **Commit:** `feat: add Ollama LLM provider`
 
 ### Phase 13 — RAG orchestration pipeline

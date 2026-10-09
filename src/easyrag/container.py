@@ -18,6 +18,8 @@ from easyrag.ingestion.chunker import Chunker, ChunkingConfig
 from easyrag.ingestion.indexer import Indexer
 from easyrag.ingestion.loader import FilesystemMarkdownLoader
 from easyrag.ingestion.markdown import MarkdownParser
+from easyrag.llm.base import LLMProvider
+from easyrag.llm.ollama import OllamaLLMProvider
 from easyrag.retrieval.base import Retriever
 from easyrag.retrieval.vector import VectorRetriever
 from easyrag.storage.database import create_engine, ping
@@ -35,6 +37,7 @@ class AppContainer:
     engine: AsyncEngine
     http_client: httpx2.AsyncClient
     embeddings: EmbeddingProvider
+    llm: LLMProvider
     indexer: Indexer
     retriever: Retriever
     # Reported by /health/ready, in this order.
@@ -63,6 +66,10 @@ def build_container(settings: Settings) -> AppContainer:
         batch_size=settings.embedding_batch_size,
         query_prefix=settings.embedding_query_prefix,
         document_prefix=settings.embedding_document_prefix,
+    )
+
+    llm = OllamaLLMProvider(
+        http_client, model=settings.llm_model, context_window=settings.llm_context_window
     )
 
     index_store = PostgresIndexStore(engine)
@@ -102,12 +109,14 @@ def build_container(settings: Settings) -> AppContainer:
         engine=engine,
         http_client=http_client,
         embeddings=embeddings,
+        llm=llm,
         indexer=indexer,
         retriever=retriever,
         readiness_checks={
             "database": database,
             "schema": schema,
             "embedding_model": embeddings.readiness,
+            "llm_model": llm.readiness,
             "index": index,
         },
     )
