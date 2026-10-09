@@ -91,6 +91,7 @@ def _sections(
                 text="\n".join(lines[first : last + 1]),
                 start_line=first + 1,
                 end_line=last + 1,
+                body_start_line=first + 1,
             )
         )
 
@@ -114,6 +115,7 @@ def _sections(
                 text="\n".join(lines[first : last + 1]),
                 start_line=heading.line + 1,
                 end_line=last + 1,
+                body_start_line=first + 1,
             )
         )
 

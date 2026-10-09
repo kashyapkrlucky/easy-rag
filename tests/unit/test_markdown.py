@@ -81,7 +81,7 @@ def test_section_text_excludes_heading_and_surrounding_blank_lines() -> None:
 
     (section,) = parsed.sections
     assert section.text == "Run the installer.\n\nThen restart."
-    assert (section.start_line, section.end_line) == (1, 6)
+    assert (section.start_line, section.end_line, section.body_start_line) == (1, 6, 4)
 
 
 def test_line_numbers_point_into_the_source_file() -> None:
@@ -102,6 +102,7 @@ def test_line_numbers_point_into_the_source_file() -> None:
     )
 
     assert [(s.start_line, s.end_line) for s in parsed.sections] == [(4, 4), (6, 7), (9, 11)]
+    assert [s.body_start_line for s in parsed.sections] == [4, 7, 10]
 
 
 def test_hash_inside_code_fence_is_not_a_heading() -> None:

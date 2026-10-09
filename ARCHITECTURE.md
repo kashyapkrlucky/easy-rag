@@ -140,6 +140,7 @@ easy-rag/
 │   ├── __init__.py                   (P1)
 │   ├── main.py                       (P1)  app factory + lifespan
 │   ├── config.py                     (P1)  Settings (pydantic-settings)
+│   ├── tokens.py                     (P6)  deterministic token estimate
 │   ├── container.py                  (P3)  composition root: builds adapters/services
 │   ├── cli.py                        (P9)  `easyrag index | eval | ...` (argparse)
 │   ├── domain/
@@ -347,7 +348,7 @@ chunks
   content               TEXT NOT NULL             -- raw chunk text shown to the LLM
   content_hash          CHAR(64) NOT NULL         -- indexed (P4)
   start_line, end_line  INTEGER NOT NULL
-  token_estimate        INTEGER NOT NULL
+  token_estimate        INTEGER NOT NULL          -- estimate for embed_text (header + content)
   embedding             VECTOR(d)                 -- (P9) d = configured dimension
   embedding_model       TEXT                      -- (P9)
   search_vector         TSVECTOR GENERATED        -- (P17)
@@ -419,16 +420,37 @@ code, setext headings, front matter. Front matter is parsed with PyYAML.
   `"{document title} > {heading path}\n\n{content}"`, while `content` (raw text) is what
   the LLM sees and what we store. Section context improves retrieval a lot.
 
+*Implemented in Phase 6:*
+- `content` is always a **verbatim, contiguous slice of source lines** (`start_line..end_line`).
+  The only exception is pieces of a single over-long line. Citations can therefore point
+  at exact lines, and tests verify every chunk against the source.
+- The budget (`max_tokens`, default 400) applies to `embed_text`, the header plus content,
+  because that's what the embedding model receives. The header never reduces the content
+  budget below half.
+- Splitting falls back from blocks, to lines, to whitespace inside a line, and finally to
+  a hard cut.
+- Overlap (default 50) is made of **trailing whole blocks only**. If the last block is
+  larger than the overlap budget, consecutive chunks don't overlap, which is acceptable
+  given section-bounded chunks and section headers in every embedding.
+- The title isn't repeated in the header when it equals the first heading.
+- Lines that produce no Markdown block (e.g. link reference definitions) are still included.
+- Token estimates (`easyrag/tokens.py`) are ⌈other characters / 4⌉ plus 1 per wide CJK
+  character. Plain `chars/4` underestimates CJK text 2–4×.
+
 **D8 — Content hashing and pipeline fingerprint.** Text is normalised first: UTF-8, BOM
 stripped, `\r\n` → `\n`. A document is re-indexed when its `content_hash` changes **or**
 when the `pipeline_fingerprint` changes (parser/chunker version, chunk params, embedding
 model). A content hash alone would silently keep stale chunks after a config change.
 
 **D9 — Deterministic chunk IDs.**
-`chunk.id = sha256(source_path ‖ heading_path ‖ ordinal_in_section ‖ content_hash)[:32]`.
+`chunk.id = sha256(source_path ␟ section_anchor ␟ index_in_section ␟ content_hash)[:32]`.
 The same input and config always produce the same IDs, which makes indexing reproducible
-and diffs meaningful. Separately, **embeddings are reused by `(content_hash,
-embedding_model)`**, so editing one paragraph doesn't re-embed the whole document.
+and diffs meaningful. *Refined in Phase 6:* the ID uses the **section anchor** rather than
+the heading path. Anchors are unique per document, so sibling sections with identical
+headings and text (e.g. `## Setup` under both "Linux" and "macOS") cannot collide. IDs
+contain no document-wide position, so editing one section never changes another section's
+IDs (tested). Separately, **embeddings are reused by `(content_hash, embedding_model)`**,
+so editing one paragraph doesn't re-embed the whole document.
 Evaluation datasets reference *document + section* rather than chunk IDs, because
 chunk IDs legitimately change when chunking config changes.
 
@@ -599,7 +621,7 @@ Chat contract (target):
 | `EASYRAG_LOG_LEVEL` | `INFO` | 1 |
 | `EASYRAG_DATABASE_URL` | — (required) | 3 |
 | `EASYRAG_DOCS_DIR` | `/data/docs` (container) | 9 |
-| `EASYRAG_CHUNK_MAX_TOKENS` / `_OVERLAP_TOKENS` | `400` / `50` | 6 |
+| `EASYRAG_CHUNK_MAX_TOKENS` / `_OVERLAP_TOKENS` | `400` / `50` | 9 |
 | `EASYRAG_OLLAMA_BASE_URL` | `http://ollama:11434` | 8 |
 | `EASYRAG_EMBEDDING_MODEL` / `_DIMENSION` | chosen in P8 | 8 |
 | `EASYRAG_RETRIEVAL_TOP_K` | `5` | 10 |

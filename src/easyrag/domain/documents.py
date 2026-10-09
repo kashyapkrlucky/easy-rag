@@ -51,6 +51,8 @@ class Section:
     # 1-based, inclusive line range in the source file (heading line included).
     start_line: int
     end_line: int
+    # 1-based line of the first line of ``text`` in the source file.
+    body_start_line: int
 
 
 @dataclass(frozen=True, slots=True)

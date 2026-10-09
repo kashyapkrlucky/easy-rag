@@ -78,8 +78,10 @@ Decision references (D1–D24) point to [ARCHITECTURE.md §9](ARCHITECTURE.md#9-
 
 ### Phase 6 — Deterministic chunking
 - **Objective:** section-bounded, block-aware chunking with overlap, contextual embed text and deterministic IDs. (D7, D9)
-- **Files:** `domain/chunks.py`, `ingestion/chunker.py`
+- **Files:** `domain/chunks.py`, `tokens.py`, `ingestion/chunker.py`; `Section.body_start_line` added to the Phase 5 parser.
 - **Tests:** same input → identical chunks/IDs; no chunk crosses a section; code fences and tables stay intact; oversize-block fallback; overlap behaviour; edits to one section change only that section's chunk IDs.
+- **Not yet:** `EASYRAG_CHUNK_*` settings (Phase 9, where the indexer first constructs a chunker).
+- **Status:** ✅ done
 - **Commit:** `feat: add deterministic document chunking`
 
 ### Phase 7 — Embedding provider abstraction
