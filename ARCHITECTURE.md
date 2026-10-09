@@ -197,6 +197,8 @@ easy-rag/
 │   └── web/                          (P23) static HTML/JS served by FastAPI
 └── tests/
     ├── conftest.py
+    ├── support.py                    shared helpers (importable)
+    ├── contracts/                    (P7) reusable suites every port implementation must pass
     ├── unit/                         no network, no DB — fast, always run
     ├── integration/                  real Postgres+pgvector (marker: integration)
     └── e2e/                          real Ollama (marker: e2e, opt-in)
@@ -318,6 +320,30 @@ implementation or a test fake genuinely needs it.
 Honest limitation: `VectorStore` and `DocumentRepository` share a Postgres transaction so a
 document's re-index is atomic. Swapping Postgres out would therefore mean re-implementing
 both; that is an accepted trade-off for transactional consistency.
+
+### Embedding provider contract (Phase 7)
+
+Every `EmbeddingProvider` must:
+- return exactly one vector per input text, in input order;
+- return vectors of exactly `dimension` finite floats with **unit L2 norm**, so cosine
+  similarity equals the dot product and scores are comparable;
+- return `[]` for empty input without contacting the backend;
+- be deterministic, within a small floating-point tolerance for real models.
+
+Adapters validate backend output with `validate_embeddings()`. A wrong count, wrong
+dimension, NaN/∞ or zero vector raises `EmbeddingResponseError` rather than reaching
+pgvector. The suite `tests/contracts/embedding_provider.py` enforces the contract: each
+provider's tests subclass it.
+
+Errors are split by how the caller should react:
+- `EmbeddingProviderUnavailableError`: connection failure, timeout or missing model.
+  Retryable; the API returns 503.
+- `EmbeddingResponseError`: the backend answered, but with invalid output.
+
+`FakeEmbeddingProvider` is a deterministic lexical hashing embedder: words are hashed with
+BLAKE2b into signed buckets and the result is normalised. Texts that share words really are
+similar, so retrieval and indexing can be tested end-to-end without Ollama. It also records
+its calls, so tests can assert "no embedding calls on an unchanged re-index".
 
 ---
 
@@ -531,7 +557,7 @@ debouncing. Bind-mounted volumes on Docker Desktop don't always deliver native f
 events reliably, so polling can be forced via config. A periodic full re-sync is the
 safety net, and because indexing is idempotent (D10), it's cheap.
 
-**D21 — Error model.** Adapters raise domain exceptions (`EmbeddingProviderError`,
+**D21 — Error model.** Adapters raise domain exceptions (`EmbeddingProviderUnavailableError`,
 `LLMProviderUnavailable`, `DocumentParseError`, ...). The API maps them to HTTP status codes
 (503 when a dependency is unavailable, 422 for validation errors) with a stable error body.
 A single malformed document is logged and skipped; it never aborts the whole index run.

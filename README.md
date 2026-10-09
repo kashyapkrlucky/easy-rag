@@ -4,7 +4,7 @@ A self-hosted, local-first Retrieval-Augmented Generation system for your Markdo
 documents. It runs entirely on your machine — Python, FastAPI, PostgreSQL + pgvector and
 Ollama — with no external SaaS.
 
-> **Status: Phase 6 — deterministic chunking.** Documents can be loaded, parsed and chunked (library only); no indexing or API yet.
+> **Status: Phase 7 — embedding provider abstraction.** Documents can be loaded, parsed and chunked; the embedding port is defined (library only, no real model yet).
 > See [ROADMAP.md](ROADMAP.md) for progress.
 
 ## What it will do

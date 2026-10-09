@@ -86,8 +86,10 @@ Decision references (D1–D24) point to [ARCHITECTURE.md §9](ARCHITECTURE.md#9-
 
 ### Phase 7 — Embedding provider abstraction
 - **Objective:** the `EmbeddingProvider` Protocol plus a deterministic fake, and the domain errors.
-- **Files:** `embeddings/base.py`, `embeddings/fake.py`
-- **Tests:** the fake is deterministic, has the correct dimension, and its vectors are normalised; a conformance test suite usable by every provider.
+- **Files:** `embeddings/base.py`, `embeddings/fake.py`, `tests/contracts/embedding_provider.py`
+- **Tests:** a reusable contract suite (shape, unit norm, order, batching invariance, determinism, empty input, Unicode), checked against deliberately broken providers; fake-specific behaviour (lexical similarity, stability across instances, call log); validation helpers.
+- **Not yet:** settings and container wiring (Phase 8, with the first real provider).
+- **Status:** ✅ done
 - **Commit:** `feat: add embedding provider abstraction`
 
 ### Phase 8 — Ollama embeddings
