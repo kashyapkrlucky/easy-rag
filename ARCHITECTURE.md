@@ -212,9 +212,9 @@ root-level Markdown files rather than in `docs/`.
 
 ```
 ./docs/**/*.md
-     │  FilesystemMarkdownLoader.discover()
+     │  FilesystemMarkdownLoader.load() → LoadResult { documents, skipped }
      ▼
-SourceDocument { source_path (relative, POSIX), text (normalised), content_hash, mtime }
+SourceDocument { source_path (relative, POSIX, NFC), text (normalised), content_hash, size_bytes }
      │  compare (content_hash, pipeline_fingerprint) with documents table
      ├── unchanged ─────────────────────────────────────────────► skip
      ▼  new / changed
@@ -261,7 +261,7 @@ mypy checks conformance). Signatures below are **design sketches**, finalised in
 
 ```python
 class DocumentLoader(Protocol):
-    def discover(self) -> Iterable[SourceDocument]: ...
+    def load(self) -> LoadResult: ...  # documents + skipped files (with reasons)
 
 
 class EmbeddingProvider(Protocol):
@@ -393,6 +393,18 @@ with fakes.
 **D6 — Markdown parsing with `markdown-it-py`.** A CommonMark-compliant token stream
 with source line maps. This handles the cases regex parsers get wrong: `#` inside fenced
 code, setext headings, front matter. Front matter is parsed with PyYAML.
+*Implemented in Phase 5:*
+- Only **top-level** headings delimit sections; headings inside block quotes or lists are
+  body text. Skipped levels (H1 → H3) still produce a correct heading path.
+- Section text excludes the heading line, trimmed of blank lines; `start_line`/`end_line`
+  are 1-based and refer to the original file (heading line included). Text before the
+  first heading is a level-0 "preamble" section with an empty heading path. Headings with
+  no body produce no section but remain in their children's heading paths.
+- Anchors are GitHub-style slugs, de-duplicated per document (`setup`, `setup-1`, …).
+- Title: front matter `title` → first H1 → humanised filename.
+- Front matter must be a YAML mapping (`yaml.safe_load`); anything else is ignored with
+  a warning. Values are made JSON-compatible (dates → ISO strings) for the JSONB column.
+- GFM tables and strikethrough are enabled on top of CommonMark.
 
 **D7 — Heading-aware, structure-preserving chunking.**
 - Split by sections first (a chunk never spans two sections).
@@ -506,6 +518,11 @@ A single malformed document is logged and skipped; it never aborts the whole ind
 context is still wrapped in clear delimiters, and the prompt states that context text is
 not instructions. File reads are confined to the docs root: symlinks resolved and checked,
 `..` rejected.
+*Implemented in Phase 5:* symlinked files are followed only when they resolve inside the
+root; symlinked directories are never traversed. Hidden files and directories are ignored.
+Files over 5 MiB, unreadable files and invalid UTF-8 are **reported** in
+`LoadResult.skipped` (not silently dropped), so incremental indexing (Phase 15) can tell a
+deleted file from a temporarily unreadable one.
 
 **D23 — Tooling.** Python 3.13, `uv` for dependency management + lockfile (`uv_build`
 backend, `src/` layout), `ruff` (lint + format), `mypy --strict` with the pydantic plugin,
@@ -581,7 +598,7 @@ Chat contract (target):
 |---|---|---|
 | `EASYRAG_LOG_LEVEL` | `INFO` | 1 |
 | `EASYRAG_DATABASE_URL` | — (required) | 3 |
-| `EASYRAG_DOCS_DIR` | `/data/docs` (container) | 5 |
+| `EASYRAG_DOCS_DIR` | `/data/docs` (container) | 9 |
 | `EASYRAG_CHUNK_MAX_TOKENS` / `_OVERLAP_TOKENS` | `400` / `50` | 6 |
 | `EASYRAG_OLLAMA_BASE_URL` | `http://ollama:11434` | 8 |
 | `EASYRAG_EMBEDDING_MODEL` / `_DIMENSION` | chosen in P8 | 8 |

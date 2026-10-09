@@ -72,7 +72,8 @@ Decision references (D1–D24) point to [ARCHITECTURE.md §9](ARCHITECTURE.md#9-
 - **Objective:** discover, read, normalise and hash `.md` files; parse front matter and the heading tree into sections. (D6, D8, D22)
 - **Files:** `domain/documents.py`, `ingestion/loader.py`, `ingestion/markdown.py`
 - **Tests:** fixtures covering nested headings, headings inside code fences, setext headings, front matter, no headings, empty files, CRLF/BOM normalisation, path traversal/symlink escape, stable sort order.
-- **Not yet:** chunking, DB writes.
+- **Not yet:** chunking, DB writes, `EASYRAG_DOCS_DIR` + the `./docs` mount (Phase 9, when indexing first reads the directory).
+- **Status:** ✅ done
 - **Commit:** `feat: add Markdown document loading`
 
 ### Phase 6 — Deterministic chunking
@@ -95,7 +96,7 @@ Decision references (D1–D24) point to [ARCHITECTURE.md §9](ARCHITECTURE.md#9-
 - **Commit:** `feat: add Ollama embedding provider`
 
 ### Phase 9 — Store chunks and embeddings in pgvector
-- **Objective:** a migration adding the `embedding` + `embedding_model` columns and the HNSW index; `VectorStore` + `PgVectorStore`; `DocumentRepository`; a basic full (non-incremental) indexer; `easyrag index` CLI; startup model/dimension guard. (D10 atomicity, D11)
+- **Objective:** a migration adding the `embedding` + `embedding_model` columns and the HNSW index; `VectorStore` + `PgVectorStore`; `DocumentRepository`; a basic full (non-incremental) indexer; `easyrag index` CLI; `EASYRAG_DOCS_DIR` + read-only `./docs` mount in compose; startup model/dimension guard. (D10 atomicity, D11)
 - **Files:** `storage/migrations/versions/0002_…`, `storage/{repositories,vector_store}.py`, `ingestion/indexer.py`, `cli.py`
 - **Tests:** integration: indexing a fixture corpus stores the expected rows; re-running yields the same rows; dimension mismatch refuses to start.
 - **Commit:** `feat: store document chunks and embeddings`

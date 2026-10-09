@@ -4,7 +4,7 @@ A self-hosted, local-first Retrieval-Augmented Generation system for your Markdo
 documents. It runs entirely on your machine — Python, FastAPI, PostgreSQL + pgvector and
 Ollama — with no external SaaS.
 
-> **Status: Phase 4 — database schema and migrations.** Health endpoints only; no RAG features yet.
+> **Status: Phase 5 — Markdown document loading.** Documents can be loaded and parsed (library only); no indexing or API yet.
 > See [ROADMAP.md](ROADMAP.md) for progress.
 
 ## What it will do
