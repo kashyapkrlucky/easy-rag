@@ -1,12 +1,15 @@
 """Request and response models of the public HTTP API (v1)."""
 
+from datetime import datetime
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, StringConstraints
 
 from easyrag.domain.answers import Answer
 from easyrag.domain.chunks import RetrievedChunk
+from easyrag.ingestion.coordinator import IndexStatus
 from easyrag.retrieval.vector import MAX_TOP_K
+from easyrag.storage.index_store import IndexedDocument
 
 Query = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2000)]
 
@@ -97,3 +100,84 @@ class ChatResponse(BaseModel):
             truncated=answer.truncated,
             sources=[SourceResponse.from_domain(chunk) for chunk in answer.sources],
         )
+
+
+class IndexReportResponse(BaseModel):
+    documents_added: int
+    documents_updated: int
+    documents_unchanged: int
+    documents_deleted: int
+    chunks_embedded: int
+    chunks_reused: int
+    failed: list[dict[str, str]] = Field(description="[{document, reason}]")
+    skipped: list[dict[str, str]] = Field(description="[{document, reason}]")
+    deletion_guarded: bool = Field(
+        description="True if removed documents were kept because the docs directory was empty"
+    )
+    duration_seconds: float
+
+
+class IndexStatusResponse(BaseModel):
+    state: Literal["idle", "running", "succeeded", "failed"]
+    started_at: datetime | None
+    finished_at: datetime | None
+    last_error: str | None
+    attempts: int = Field(description="Consecutive failed startup attempts while waiting")
+    last_report: IndexReportResponse | None
+    documents: int = Field(description="Documents currently in the index")
+    chunks: int = Field(description="Chunks currently in the index")
+
+    @classmethod
+    def from_domain(cls, status: IndexStatus, documents: int, chunks: int) -> "IndexStatusResponse":
+        report = status.last_report
+        return cls(
+            state=status.state,
+            started_at=status.started_at,
+            finished_at=status.finished_at,
+            last_error=status.last_error,
+            attempts=status.attempts,
+            documents=documents,
+            chunks=chunks,
+            last_report=None
+            if report is None
+            else IndexReportResponse(
+                documents_added=report.documents_added,
+                documents_updated=report.documents_updated,
+                documents_unchanged=report.documents_unchanged,
+                documents_deleted=report.documents_deleted,
+                chunks_embedded=report.chunks_embedded,
+                chunks_reused=report.chunks_reused,
+                failed=[{"document": f.source_path, "reason": f.reason} for f in report.failed],
+                skipped=[{"document": f.source_path, "reason": f.reason} for f in report.skipped],
+                deletion_guarded=report.deletion_guarded,
+                duration_seconds=round(report.duration_seconds, 3),
+            ),
+        )
+
+
+class IndexTriggerResponse(BaseModel):
+    status: Literal["started"] = "started"
+
+
+class DocumentResponse(BaseModel):
+    document: str
+    title: str
+    content_hash: str
+    size_bytes: int
+    chunks: int
+    indexed_at: datetime
+
+    @classmethod
+    def from_domain(cls, document: IndexedDocument) -> "DocumentResponse":
+        return cls(
+            document=document.source_path,
+            title=document.title,
+            content_hash=document.content_hash,
+            size_bytes=document.size_bytes,
+            chunks=document.chunk_count,
+            indexed_at=document.indexed_at,
+        )
+
+
+class DocumentsResponse(BaseModel):
+    documents: list[DocumentResponse]

@@ -11,7 +11,7 @@ from fastapi import FastAPI
 
 from easyrag import __version__
 from easyrag.api.errors import register_error_handlers
-from easyrag.api.routes import chat, health, retrieve
+from easyrag.api.routes import chat, health, index, retrieve
 from easyrag.config import Settings
 from easyrag.container import ContainerFactory, build_container
 from easyrag.observability.logging import configure_logging
@@ -35,6 +35,8 @@ def create_app(
         logger.info("EasyRAG %s starting", __version__)
         container = container_factory(resolved)
         app.state.container = container
+        if resolved.index_on_startup:
+            container.indexing.start_until_success()
         try:
             yield
         finally:
@@ -46,4 +48,5 @@ def create_app(
     app.include_router(health.router)
     app.include_router(retrieve.router)
     app.include_router(chat.router)
+    app.include_router(index.router)
     return app

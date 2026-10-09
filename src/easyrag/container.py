@@ -15,6 +15,7 @@ from easyrag.embeddings.base import EmbeddingProvider
 from easyrag.embeddings.ollama import OllamaEmbeddingProvider
 from easyrag.health import CheckStatus, ReadinessCheck
 from easyrag.ingestion.chunker import Chunker, ChunkingConfig
+from easyrag.ingestion.coordinator import IndexingCoordinator
 from easyrag.ingestion.indexer import Indexer
 from easyrag.ingestion.loader import FilesystemMarkdownLoader
 from easyrag.ingestion.markdown import MarkdownParser
@@ -41,12 +42,15 @@ class AppContainer:
     embeddings: EmbeddingProvider
     llm: LLMProvider
     indexer: Indexer
+    indexing: IndexingCoordinator
+    index_store: PostgresIndexStore
     retriever: Retriever
     rag: RagService
     # Reported by /health/ready, in this order.
     readiness_checks: Mapping[str, ReadinessCheck]
 
     async def aclose(self) -> None:
+        await self.indexing.aclose()  # stop background indexing before closing its clients
         await self.http_client.aclose()
         await self.engine.dispose()
 
@@ -130,6 +134,8 @@ def build_container(settings: Settings) -> AppContainer:
         embeddings=embeddings,
         llm=llm,
         indexer=indexer,
+        indexing=IndexingCoordinator(indexer),
+        index_store=index_store,
         retriever=retriever,
         rag=rag,
         readiness_checks={

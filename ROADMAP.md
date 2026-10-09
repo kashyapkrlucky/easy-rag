@@ -151,12 +151,14 @@ Decision references (D1–D24) point to [ARCHITECTURE.md §9](ARCHITECTURE.md#9-
 - **Commit:** `feat: add grounded answers with source citations`
 
 ### Phase 15 — Automatic, incremental indexing
-- **Objective:** hash + fingerprint diffing, embedding reuse (plus the `(content_hash, embedding_model)` index), deletion of removed documents (never of files the loader merely *skipped*), an advisory lock, indexing on startup as a background task, and the index status/documents/trigger endpoints. (D8–D10)
-- **Files:** `ingestion/indexer.py`, `main.py` lifespan, `api/routes/index.py`
-- **Tests:** integration: an unchanged second run makes 0 embed calls; editing one section re-embeds only the changed chunks; delete/rename; a fingerprint change triggers a full re-index; concurrent runs serialise.
+- **Objective:** hash + fingerprint diffing, embedding reuse by **embedding-input hash** (corrected from `content_hash`, see D9), deletion of removed documents (never of files the loader merely *skipped*, never everything because the docs directory came back empty), an advisory lock, indexing on startup as a background task with retries, and the index status/documents/trigger endpoints. (D8–D10, D31)
+- **Files:** `ingestion/{indexer,coordinator}.py`, `storage/index_store.py`, migration `0003_embedding_input_hash.py`, `api/routes/index.py`, `main.py` lifespan, `cli.py` report, `EASYRAG_INDEX_ON_STARTUP`.
+- **Tests:** unit (in-memory store): unchanged run makes 0 embed calls and 0 writes; one edited section re-embeds 1 chunk; heading change gets a new vector; delete; rename reuses vectors; fingerprint change re-indexes all; skipped file kept; empty-directory guard; rebuild; failures keep the previous version; lock released on failure. Coordinator: backoff schedule, stop on incompatible index, 409 while running, cancellation. API: status/trigger/documents. Integration (real Postgres): zero rewrites on unchanged runs, reuse via input hash, cascade deletion, **concurrent runs serialise**, read models.
+- **Status:** ✅ done
 - **Commit:** `feat: add incremental document indexing`
 
 ### Phase 16 — Filesystem change detection
+- **Builds on:** `IndexingCoordinator` (D31). The watcher should *request* a run, coalescing with one already in progress, rather than call the indexer directly.
 - **Objective:** a `watchfiles` watcher with debounce, a polling fallback and periodic re-sync, all feeding the same indexer. (D20)
 - **Files:** `ingestion/watcher.py`, lifespan wiring, config
 - **Tests:** create/modify/delete triggers a sync (temporary directory); debounce coalesces bursts; clean shutdown.

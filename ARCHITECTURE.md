@@ -162,6 +162,7 @@ easy-rag/
 │   │   ├── markdown.py               (P5)
 │   │   ├── chunker.py                (P6)
 │   │   ├── indexer.py                (P9, incremental in P15)
+│   │   ├── coordinator.py            (P15) background runs, startup retries, status
 │   │   └── watcher.py                (P16)
 │   ├── embeddings/
 │   │   ├── base.py                   (P7)  EmbeddingProvider Protocol
@@ -415,7 +416,8 @@ chunks
   heading_path          TEXT[] NOT NULL           -- ["Deployment", "Docker Deployment"]
   section_anchor        TEXT NOT NULL             -- "docker-deployment"
   content               TEXT NOT NULL             -- raw chunk text shown to the LLM
-  content_hash          CHAR(64) NOT NULL         -- indexed (P4)
+  content_hash          CHAR(64) NOT NULL
+  embedding_input_hash  CHAR(64)                  -- (P15) sha256(embed_text); NULL for pre-0003 rows
   start_line, end_line  INTEGER NOT NULL
   token_estimate        INTEGER NOT NULL          -- estimate for embed_text (header + content)
   embedding             VECTOR NOT NULL           -- (P9) dimension-agnostic; see D11
@@ -423,7 +425,7 @@ chunks
   search_vector         TSVECTOR GENERATED        -- (P17)
   UNIQUE (document_id, ordinal)
   INDEX hnsw ((embedding::vector(d)) vector_cosine_ops)  -- (P9) app-managed, see D11
-  INDEX (content_hash, embedding_model)           -- (P15) embedding reuse lookup
+  INDEX (embedding_input_hash, embedding_model)   -- (P15) embedding reuse lookup
   INDEX gin (search_vector)                       -- (P17)
 
 index_state                                        -- key/value
@@ -533,8 +535,11 @@ and diffs meaningful. *Refined in Phase 6:* the ID uses the **section anchor** r
 the heading path. Anchors are unique per document, so sibling sections with identical
 headings and text (e.g. `## Setup` under both "Linux" and "macOS") cannot collide. IDs
 contain no document-wide position, so editing one section never changes another section's
-IDs (tested). Separately, **embeddings are reused by `(content_hash, embedding_model)`**,
-so editing one paragraph doesn't re-embed the whole document.
+IDs (tested). Separately, embeddings are reused, so editing one paragraph doesn't
+re-embed the whole document. *Corrected in Phase 15:* the reuse key is
+**`(embedding_input_hash, embedding_model)`**, where `embedding_input_hash = sha256(embed_text)`
+(contextual header + content), **not** `content_hash`. Reusing by content hash would keep
+a stale vector for unchanged text under a renamed heading or document title (tested).
 Evaluation datasets reference *document + section* rather than chunk IDs, because
 chunk IDs legitimately change when chunking config changes.
 
@@ -544,6 +549,42 @@ chunk IDs legitimately change when chunking config changes.
 - A Postgres advisory lock guarantees a single writer (startup sync, watcher and the
   manual trigger can't race).
 - Running the indexer twice with no file changes performs zero embedding calls and zero writes.
+
+*Implemented in Phase 15:*
+- Documents whose content hash *and* pipeline fingerprint match are skipped without
+  parsing.
+- **Deletion is conservative.** Files the loader *skipped* keep their last good version, a
+  failed embedding never deletes, and an **empty docs directory never deletes every
+  document**. A wrong mount would otherwise wipe the index; the run reports
+  `deletion_guarded` instead, and `--rebuild` empties the index deliberately.
+- The lock is a session-level advisory lock on a dedicated connection, held for the whole
+  run. It's released explicitly, or by PostgreSQL if the process dies. The CLI waits for it.
+
+**D31 — Background indexing in the API (Phase 15).** `IndexingCoordinator`
+(`ingestion/coordinator.py`) runs the indexer as a background task and keeps the
+in-process status: state, timestamps, last report, last error and startup attempts.
+- At startup (`EASYRAG_INDEX_ON_STARTUP=true`) it **retries with exponential backoff**
+  (5 s, 10 s, 20 s, … capped at 60 s) while dependencies aren't ready yet, for example
+  Ollama still pulling models. It stops only on an incompatible index, which needs a human.
+- `POST /api/v1/index` returns `202` and runs in the background, or returns
+  `409 index_running`. Requests never wait minutes for indexing.
+- Readiness stays independent of indexing progress (D18). The coordinator is cancelled
+  before the container closes its clients.
+- **Regression caught and fixed.** The Phase 10 `EXPLAIN` test caught that the new
+  `(embedding_input_hash, embedding_model)` btree index let PostgreSQL 18 serve the search's
+  `WHERE embedding_model = …` with a skip scan. The planner then chose that index and sorted
+  every row, instead of using HNSW. The inner k-NN query is now a pure
+  `ORDER BY distance LIMIT k`; the model filter moved to the outer query (D27).
+- Measured live (5 documents, 93 chunks, CPU Ollama):
+
+  | Run | Result |
+  |---|---|
+  | first startup | 93 chunks embedded, 76 s |
+  | restart | 5 unchanged, 0 embeddings, 0.2 s |
+  | one section edited | 1 updated, 1 embedded, 1 reused, 3.1 s |
+  | file deleted | 1 deleted |
+  | empty mount | nothing deleted, `deletion_guarded: true` |
+  | Ollama down at startup | retried at 5/10/20 s, succeeded when Ollama returned |
 
 **D11 — Fixed embedding dimension per deployment.** A pgvector HNSW index needs a fixed
 dimension. The dimension comes from config at migration time, and `index_state` records
@@ -856,9 +897,9 @@ numbers must match.
 | `GET /health/ready` | 3 (extended 8, 12) | Readiness: DB, migrations, model provider |
 | `POST /api/v1/retrieve` | 10 | Retrieval only (debugging, evaluation) |
 | `POST /api/v1/chat` | 13–14 ✅ | Question → `{answer, status, grounded, truncated, sources}`; `[k]` in the answer ⇔ `sources[k-1]` |
-| `GET /api/v1/documents` | 15 | Indexed documents with hash & chunk count |
-| `GET /api/v1/index/status` | 15 | Last run, counts, errors, in-progress flag |
-| `POST /api/v1/index` | 15 | Trigger a sync |
+| `GET /api/v1/documents` | 15 ✅ | Indexed documents: path, title, hash, size, chunk count, indexed_at |
+| `GET /api/v1/index/status` | 15 ✅ | State, last report, last error, startup attempts, document/chunk counts |
+| `POST /api/v1/index` | 15 ✅ | Start an incremental run: 202, or 409 `index_running` |
 | `GET /metrics` | 20 | Prometheus metrics |
 
 Chat contract (target):

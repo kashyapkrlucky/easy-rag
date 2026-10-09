@@ -19,6 +19,7 @@ from sqlalchemy.exc import DBAPIError
 
 from easyrag.domain.errors import IndexIncompatibleError
 from easyrag.embeddings.base import EmbeddingProviderUnavailableError, EmbeddingResponseError
+from easyrag.ingestion.coordinator import IndexRunInProgressError
 from easyrag.llm.base import LLMProviderUnavailableError, LLMResponseError
 
 logger = logging.getLogger(__name__)
@@ -75,6 +76,12 @@ async def _index_incompatible(request: Request, exc: Exception) -> JSONResponse:
     return error_response(status.HTTP_503_SERVICE_UNAVAILABLE, "index_incompatible", str(exc))
 
 
+async def _index_running(request: Request, exc: Exception) -> JSONResponse:
+    return error_response(
+        status.HTTP_409_CONFLICT, "index_running", "An indexing run is already in progress"
+    )
+
+
 async def _database_error(request: Request, exc: Exception) -> JSONResponse:
     logger.error("Database error (%s)", type(exc).__name__)  # message may contain the DSN
     return error_response(
@@ -96,5 +103,6 @@ def register_error_handlers(app: FastAPI) -> None:
     app.add_exception_handler(LLMProviderUnavailableError, _llm_unavailable)
     app.add_exception_handler(LLMResponseError, _llm_response)
     app.add_exception_handler(IndexIncompatibleError, _index_incompatible)
+    app.add_exception_handler(IndexRunInProgressError, _index_running)
     app.add_exception_handler(DBAPIError, _database_error)
     app.add_exception_handler(Exception, _unexpected_error)

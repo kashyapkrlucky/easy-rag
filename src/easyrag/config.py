@@ -44,6 +44,9 @@ class Settings(BaseSettings):
     # Chunk budget in estimated tokens, including the contextual header (ARCHITECTURE D7).
     chunk_max_tokens: int = Field(default=400, ge=32, le=8192)
     chunk_overlap_tokens: int = Field(default=50, ge=0)
+    # Index the docs directory in the background when the API starts (retrying until
+    # Ollama and the database are ready).
+    index_on_startup: bool = True
 
     # --- Retrieval ---------------------------------------------------------------------
     retrieval_top_k: int = Field(default=5, ge=1, le=50)

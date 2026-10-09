@@ -4,7 +4,7 @@ A self-hosted, local-first Retrieval-Augmented Generation system for your Markdo
 documents. It runs entirely on your machine — Python, FastAPI, PostgreSQL + pgvector and
 Ollama — with no external SaaS.
 
-> **Status: Phase 14 — grounded answers with citations.** Ask questions with `POST /api/v1/chat` and get answers with the document sections they came from. Indexing is still manual (`easyrag index`).
+> **Status: Phase 15 — automatic, incremental indexing.** Documents are indexed when the app starts, and only changed files are re-processed. Ask questions with `POST /api/v1/chat` and get answers with their sources.
 > See [ROADMAP.md](ROADMAP.md) for progress.
 
 ## What it will do
@@ -71,22 +71,40 @@ run `ollama pull nomic-embed-text:v1.5` and set
 ### Indexing your documents
 
 Put Markdown files in `./docs` (or point `EASYRAG_DOCS_HOST_DIR` in `.env` at another
-folder), then run:
+folder). **The app indexes them automatically when it starts**, in the background. If the
+models are still downloading, it retries until they're ready.
+
+Indexing is incremental:
+- Unchanged files are skipped.
+- Only changed sections are re-embedded.
+- Deleted files are removed from the index.
+- Files that can't be read right now keep their last indexed version.
+- If the docs folder is ever *empty* (for example a wrong mount), the index is **not**
+  wiped. The status report flags it instead.
+
+After editing documents, re-index without restarting:
+
+```bash
+curl -X POST localhost:8000/api/v1/index            # 202 started (409 if already running)
+curl localhost:8000/api/v1/index/status             # state, last report, document/chunk counts
+curl localhost:8000/api/v1/documents                # what is indexed
+```
+
+Or from the command line (it waits if the API is indexing at the same moment):
 
 ```bash
 docker compose run --rm app easyrag index
 ```
 
-Re-running is safe: every document is replaced atomically. If you change the embedding
-model or its prefixes, the existing index is refused (vectors from different models can't
-be mixed). Rebuild it with:
+If you change the embedding model or its prefixes, the existing index is refused (vectors
+from different models can't be mixed). Rebuild it with:
 
 ```bash
 docker compose run --rm app easyrag index --rebuild
 ```
 
-Exit codes: `0` success, `1` some documents failed, `2` configuration problem,
-`3` embedding model unavailable. Automatic and incremental indexing arrive in a later phase.
+CLI exit codes: `0` success, `1` some documents failed, `2` configuration problem,
+`3` embedding model unavailable. Set `EASYRAG_INDEX_ON_STARTUP=false` to index only on demand.
 
 ### Asking questions
 

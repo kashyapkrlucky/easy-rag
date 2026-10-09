@@ -61,9 +61,16 @@ async def _index(settings: Settings, *, rebuild: bool) -> int:
 
 def _print_report(report: IndexReport) -> None:
     print(
-        f"Indexed {report.documents_indexed} documents ({report.chunks_indexed} chunks) "
-        f"in {report.duration_seconds:.1f}s"
+        f"Indexed in {report.duration_seconds:.1f}s: {report.documents_added} added, "
+        f"{report.documents_updated} updated, {report.documents_unchanged} unchanged, "
+        f"{report.documents_deleted} deleted; {report.chunks_embedded} chunks embedded, "
+        f"{report.chunks_reused} reused"
     )
+    if report.deletion_guarded:
+        print(
+            "  warning: the docs directory is empty, so indexed documents were NOT deleted. "
+            "Check the docs path, or run `easyrag index --rebuild` to empty the index."
+        )
     for failure in report.failed:
         print(f"  failed:  {failure.source_path}: {failure.reason}")
     for skipped in report.skipped:

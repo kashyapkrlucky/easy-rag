@@ -13,28 +13,30 @@ from easyrag.storage.index_store import DIMENSION_KEY, MODEL_KEY, read_index_sta
 def search_sql(dimension: int, *, with_min_score: bool) -> str:
     """SQL for a k-nearest-neighbour search.
 
-    The inner query orders by exactly the expression of the HNSW index
-    (``embedding::vector(N) <=> query``) so PostgreSQL can use it; pgvector's index only
-    serves a single distance ``ORDER BY``. The outer query then breaks ties by chunk ID
-    (determinism) and applies the score threshold *after* the top-k selection, so the
-    threshold never interferes with the approximate index scan.
+    The inner query is a *pure* k-nearest-neighbour search: it orders by exactly the
+    expression of the HNSW index (``embedding::vector(N) <=> query``) and has no WHERE
+    clause, so nothing tempts the planner away from the index (pgvector's index only serves
+    a single distance ``ORDER BY``; a filter usable by a btree index — PostgreSQL 18 skip
+    scans included — made it sort all rows instead). The outer query breaks ties by chunk ID
+    (determinism) and applies the model filter (defence in depth: the search already
+    refuses a mismatched index) and the score threshold *after* the top-k selection.
     """
     if not isinstance(dimension, int) or dimension < 1:  # interpolated into SQL
         raise ValueError(f"invalid embedding dimension: {dimension!r}")
     distance = f"c.embedding::vector({dimension}) <=> CAST(:query AS vector({dimension}))"
-    threshold = "WHERE 1 - nearest.distance >= :min_score" if with_min_score else ""
+    threshold = "AND 1 - nearest.distance >= :min_score" if with_min_score else ""
     return f"""
         SELECT nearest.*, 1 - nearest.distance AS score
         FROM (
             SELECT c.id AS chunk_id, d.source_path, d.title AS document_title,
                    c.heading_path, c.section_anchor, c.content, c.start_line, c.end_line,
-                   {distance} AS distance
+                   c.embedding_model, {distance} AS distance
             FROM chunks c
             JOIN documents d ON d.id = c.document_id
-            WHERE c.embedding_model = :embedding_model
             ORDER BY {distance}
             LIMIT :top_k
         ) AS nearest
+        WHERE nearest.embedding_model = :embedding_model
         {threshold}
         ORDER BY nearest.distance, nearest.chunk_id
     """

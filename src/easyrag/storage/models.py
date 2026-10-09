@@ -19,6 +19,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     MetaData,
     String,
@@ -85,6 +86,8 @@ class Chunk(Base):
     __tablename__ = "chunks"
     __table_args__ = (
         UniqueConstraint("document_id", "ordinal"),
+        # Embedding reuse lookup (incremental indexing).
+        Index(None, "embedding_input_hash", "embedding_model"),
         CheckConstraint("ordinal >= 0", name="ordinal_non_negative"),
         CheckConstraint("start_line >= 1 AND start_line <= end_line", name="line_range_valid"),
         CheckConstraint("token_estimate >= 0", name="token_estimate_non_negative"),
@@ -98,10 +101,14 @@ class Chunk(Base):
     heading_path: Mapped[list[str]] = mapped_column(ARRAY(Text))
     section_anchor: Mapped[str] = mapped_column(Text)
     content: Mapped[str] = mapped_column(Text)
-    content_hash: Mapped[str] = mapped_column(String(64), index=True)
+    content_hash: Mapped[str] = mapped_column(String(64))
     start_line: Mapped[int] = mapped_column(Integer)
     end_line: Mapped[int] = mapped_column(Integer)
     token_estimate: Mapped[int] = mapped_column(Integer)
+    # SHA-256 of the exact text that was embedded (contextual header + content). Vectors
+    # are reused by this hash: identical content under a changed heading needs a new vector.
+    # NULL for rows written before revision 0003 (never reused).
+    embedding_input_hash: Mapped[str | None] = mapped_column(String(64))
     embedding: Mapped[list[float]] = mapped_column(Vector())
     # EmbeddingProvider.model_id that produced ``embedding``.
     embedding_model: Mapped[str] = mapped_column(Text)

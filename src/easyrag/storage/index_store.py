@@ -6,22 +6,42 @@ dimension is runtime configuration; the vector column itself is dimension-agnost
 """
 
 import logging
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Mapping, Sequence
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
+from datetime import datetime
 from typing import cast
 
-from sqlalchemy import Table, delete, func, insert, select, text
+from sqlalchemy import Table, bindparam, delete, func, insert, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from easyrag.domain.errors import IndexIncompatibleError
+from easyrag.embeddings.base import Vector
 from easyrag.health import CheckStatus
-from easyrag.ingestion.indexer import DocumentToStore
+from easyrag.ingestion.indexer import DocumentToStore, StoredDocumentState, embedding_input_hash
 from easyrag.storage.models import APP_MANAGED_INDEX_PREFIX, Chunk, Document, IndexState
 
 logger = logging.getLogger(__name__)
 
 MODEL_KEY = "embedding_model"
 DIMENSION_KEY = "embedding_dimension"
+
+# Arbitrary constant: one indexing writer at a time across processes (API, CLI, watcher).
+INDEX_LOCK_KEY = 0x6561737972616702
+
+
+@dataclass(frozen=True, slots=True)
+class IndexedDocument:
+    """Read model of an indexed document (for the API)."""
+
+    source_path: str
+    title: str
+    content_hash: str
+    size_bytes: int
+    chunk_count: int
+    indexed_at: datetime
+
 
 _documents = cast(Table, Document.__table__)
 _chunks = cast(Table, Chunk.__table__)
@@ -69,6 +89,90 @@ class PostgresIndexStore:
                 )
             )
 
+    @asynccontextmanager
+    async def lock(self) -> AsyncIterator[None]:
+        # A session-level advisory lock on a dedicated connection: released explicitly,
+        # or automatically by PostgreSQL if the process dies and the connection drops.
+        async with self._engine.connect() as connection:
+            await connection.execute(text("SELECT pg_advisory_lock(:key)"), {"key": INDEX_LOCK_KEY})
+            await connection.commit()
+            try:
+                yield
+            finally:
+                await connection.execute(
+                    text("SELECT pg_advisory_unlock(:key)"), {"key": INDEX_LOCK_KEY}
+                )
+                await connection.commit()
+
+    async def document_states(self) -> Mapping[str, StoredDocumentState]:
+        async with self._engine.connect() as connection:
+            rows = await connection.execute(
+                select(
+                    _documents.c.source_path,
+                    _documents.c.content_hash,
+                    _documents.c.pipeline_fingerprint,
+                )
+            )
+            return {
+                path: StoredDocumentState(digest, fingerprint) for path, digest, fingerprint in rows
+            }
+
+    async def find_embeddings(
+        self, input_hashes: Sequence[str], embedding_model: str
+    ) -> Mapping[str, Vector]:
+        if not input_hashes:
+            return {}
+        query = text(
+            "SELECT DISTINCT ON (embedding_input_hash) embedding_input_hash, embedding::text "
+            "FROM chunks WHERE embedding_model = :model AND embedding_input_hash IN :hashes"
+        ).bindparams(bindparam("hashes", expanding=True))
+        async with self._engine.connect() as connection:
+            rows = await connection.execute(
+                query, {"model": embedding_model, "hashes": list(input_hashes)}
+            )
+            return {digest: _parse_vector(literal) for digest, literal in rows}
+
+    async def delete_documents(self, source_paths: Sequence[str]) -> None:
+        if not source_paths:
+            return
+        async with self._engine.begin() as connection:
+            await connection.execute(
+                delete(_documents).where(_documents.c.source_path.in_(list(source_paths)))
+            )
+        logger.info("Deleted %d removed documents from the index", len(source_paths))
+
+    async def list_documents(self) -> list[IndexedDocument]:
+        chunk_counts = (
+            select(_chunks.c.document_id, func.count().label("chunks"))
+            .group_by(_chunks.c.document_id)
+            .subquery()
+        )
+        query = (
+            select(
+                _documents.c.source_path,
+                _documents.c.title,
+                _documents.c.content_hash,
+                _documents.c.size_bytes,
+                func.coalesce(chunk_counts.c.chunks, 0),
+                _documents.c.indexed_at,
+            )
+            .outerjoin(chunk_counts, chunk_counts.c.document_id == _documents.c.id)
+            .order_by(_documents.c.source_path)
+        )
+        async with self._engine.connect() as connection:
+            return [IndexedDocument(*row) for row in await connection.execute(query)]
+
+    async def counts(self) -> tuple[int, int]:
+        """(documents, chunks) currently indexed."""
+        async with self._engine.connect() as connection:
+            documents = (
+                await connection.execute(select(func.count()).select_from(_documents))
+            ).scalar_one()
+            chunks = (
+                await connection.execute(select(func.count()).select_from(_chunks))
+            ).scalar_one()
+        return int(documents), int(chunks)
+
     async def save_document(self, document: DocumentToStore) -> None:
         parsed = document.document
         values = {
@@ -106,6 +210,7 @@ class PostgresIndexStore:
                             "start_line": chunk.start_line,
                             "end_line": chunk.end_line,
                             "token_estimate": chunk.token_estimate,
+                            "embedding_input_hash": embedding_input_hash(chunk),
                             "embedding": vector,
                             "embedding_model": document.embedding_model,
                         }
@@ -162,3 +267,8 @@ async def _app_managed_indexes(connection: AsyncConnection) -> list[str]:
         {"prefix": APP_MANAGED_INDEX_PREFIX},
     )
     return list(rows.scalars())
+
+
+def _parse_vector(literal: str) -> Vector:
+    """pgvector's text form "[0.1,0.2,…]" → list of floats (avoids a numpy dependency)."""
+    return [float(component) for component in literal.strip("[]").split(",")]

@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
@@ -66,7 +67,7 @@ SNAPSHOT = """
 async def test_documents_chunks_and_vectors_are_stored(docs: Path, db: AsyncEngine) -> None:
     report = await make_indexer(docs, db).run()
 
-    assert (report.documents_indexed, report.chunks_indexed) == (2, 3)
+    assert (report.documents_added, report.chunks_embedded) == (2, 3)
     documents = await rows(
         db, "SELECT source_path, title, front_matter FROM documents ORDER BY source_path"
     )
@@ -204,3 +205,71 @@ async def test_similarity_queries_can_use_the_hnsw_index(docs: Path, db: AsyncEn
         plan_text = "\n".join(plan)
 
     assert vector_index_name(DIMENSION) in plan_text, plan_text
+
+
+# -- incremental indexing (Phase 15) ---------------------------------------------------
+
+
+async def test_unchanged_second_run_embeds_and_writes_nothing(docs: Path, db: AsyncEngine) -> None:
+    embeddings = FakeEmbeddingProvider(DIMENSION, model_id="fake/a")
+    indexer = make_indexer(docs, db, embeddings)
+    await indexer.run()
+    before = await rows(db, SNAPSHOT)
+    batches = len(embeddings.document_batches)
+
+    report = await indexer.run()
+
+    assert (report.documents_unchanged, report.documents_indexed) == (2, 0)
+    assert len(embeddings.document_batches) == batches
+    assert await rows(db, SNAPSHOT) == before  # not even rewritten
+
+
+async def test_vectors_are_reused_by_embedding_input(docs: Path, db: AsyncEngine) -> None:
+    embeddings = FakeEmbeddingProvider(DIMENSION, model_id="fake/a")
+    indexer = make_indexer(docs, db, embeddings)
+    await indexer.run()
+    (docs / "api.md").rename(docs / "chat-api.md")
+
+    report = await indexer.run()
+
+    assert (report.documents_added, report.documents_deleted) == (1, 1)
+    assert (report.chunks_embedded, report.chunks_reused) == (0, 1)
+    hashes = await rows(db, "SELECT count(*) AS n FROM chunks WHERE embedding_input_hash IS NULL")
+    assert hashes == [{"n": 0}]
+
+
+async def test_removed_documents_are_deleted_with_their_chunks(docs: Path, db: AsyncEngine) -> None:
+    indexer = make_indexer(docs, db)
+    await indexer.run()
+    (docs / "api.md").unlink()
+
+    report = await indexer.run()
+
+    assert report.documents_deleted == 1
+    assert await rows(db, "SELECT source_path FROM documents") == [{"source_path": "deployment.md"}]
+    assert (await rows(db, "SELECT count(*) AS n FROM chunks"))[0]["n"] == 2
+
+
+async def test_concurrent_runs_are_serialised(docs: Path, db: AsyncEngine) -> None:
+    first = make_indexer(docs, db, FakeEmbeddingProvider(DIMENSION, model_id="fake/a"))
+    second = make_indexer(docs, db, FakeEmbeddingProvider(DIMENSION, model_id="fake/a"))
+
+    reports = await asyncio.gather(first.run(), second.run())
+
+    # One run indexed everything; the other waited for the lock and found nothing to do.
+    assert sorted(r.documents_added for r in reports) == [0, 2]
+    assert sorted(r.documents_unchanged for r in reports) == [0, 2]
+    assert (await rows(db, "SELECT count(*) AS n FROM documents"))[0]["n"] == 2
+
+
+async def test_store_lists_documents_and_counts(docs: Path, db: AsyncEngine) -> None:
+    await make_indexer(docs, db).run()
+    store = PostgresIndexStore(db)
+
+    listed = await store.list_documents()
+
+    assert [(d.source_path, d.title, d.chunk_count) for d in listed] == [
+        ("api.md", "API", 1),
+        ("deployment.md", "Deployment Guide", 2),
+    ]
+    assert await store.counts() == (2, 3)
