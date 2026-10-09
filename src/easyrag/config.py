@@ -64,6 +64,15 @@ class Settings(BaseSettings):
     llm_model: str = Field(default="qwen2.5:1.5b-instruct-q4_K_M", min_length=1)
     # Tokens per request (prompt + answer), always sent to Ollama as num_ctx.
     llm_context_window: int = Field(default=8192, ge=512, le=262144)
+    # Deterministic decoding by default (ARCHITECTURE D14).
+    llm_temperature: float = Field(default=0.0, ge=0.0, le=2.0)
+    llm_seed: int | None = 42
+    llm_max_output_tokens: int = Field(default=512, ge=16, le=8192)
+
+    # --- RAG -----------------------------------------------------------------------------
+    # Upper bound on retrieved evidence in the prompt, in estimated tokens. Prompt size
+    # dominates latency on CPU (~30 s for a 3k-token prompt measured in Docker on macOS).
+    rag_max_context_tokens: int = Field(default=2000, ge=200, le=200000)
 
     # --- Embeddings --------------------------------------------------------------------
     # Pin a tag, not "latest": a silently updated model would change every vector.
@@ -80,4 +89,10 @@ class Settings(BaseSettings):
     def _overlap_fits_chunk(self) -> "Settings":
         if self.chunk_overlap_tokens > self.chunk_max_tokens // 2:
             raise ValueError("chunk_overlap_tokens must be at most half of chunk_max_tokens")
+        return self
+
+    @model_validator(mode="after")
+    def _answer_fits_context_window(self) -> "Settings":
+        if self.llm_max_output_tokens > self.llm_context_window // 2:
+            raise ValueError("llm_max_output_tokens must be at most half of llm_context_window")
         return self

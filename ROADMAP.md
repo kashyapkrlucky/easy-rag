@@ -135,14 +135,17 @@ Decision references (D1–D24) point to [ARCHITECTURE.md §9](ARCHITECTURE.md#9-
 
 ### Phase 13 — RAG orchestration pipeline
 - **Objective:** a `RagService` (retrieve → prompt → generate), a versioned grounded prompt with a token budget, `POST /api/v1/chat` returning the answer + retrieved sources, and a `RagTrace` data shape. Grounding instructions are part of the baseline prompt. (D12.2)
-- **Files:** `domain/answers.py`, `rag/{prompt,service}.py`, `api/routes/chat.py`, a boundary (import) test
-- **Tests:** unit with fakes: prompt snapshot test; context respects the budget; errors map to 503.
+- **Files:** `domain/answers.py`, `rag/{prompt,service}.py`, `api/routes/chat.py`, `api/{schemas,errors}.py` (LLM errors → 503/502), generation and evidence-budget settings, `tests/unit/test_architecture.py`.
+- **Tests:** prompt (version fingerprint guard, exact snapshot, rules restated after sources, budget in rank order with skipping, window-limited budget, delimiter and attribute escaping); service with fakes (options passthrough, sources = what the model saw, truncation flag, trace, no content in INFO logs, error propagation); chat API (shape, validation, error mapping); layer-boundary test; integration over real pgvector with a fake model reporting the sources it received. Guards shown to catch a forbidden import and an unversioned prompt edit.
+- **Live result:** prompt v2 (D29) fixed out-of-scope answering; prompt injection still succeeds with the 1.5B model (known limitation, see D29).
+- **Status:** ✅ done
 - **Commit:** `feat: add RAG pipeline`
 
 ### Phase 14 — Grounded answers and citations
 - **Objective:** `[n]` citation markers, a parser/validator, cited-only sources, the `grounded` flag, the evidence gate that skips the LLM, and an exact refusal sentence. (D12, D13)
 - **Files:** `rag/citations.py`, `rag/prompt.py`, `rag/service.py`, schemas
 - **Tests:** invalid or out-of-range markers dropped; duplicate markers; refusal detection; the gate bypasses the LLM (the fake asserts it was not called).
+- **Carried over from Phase 13's live testing:** a refusal must return **no** sources (today it lists every retrieved chunk), and an answer citing nothing must be `grounded: false`. This is what flags the prompt-injection case.
 - **Commit:** `feat: add grounded answers with source citations`
 
 ### Phase 15 — Automatic, incremental indexing

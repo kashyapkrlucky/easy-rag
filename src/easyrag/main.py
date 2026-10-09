@@ -11,7 +11,7 @@ from fastapi import FastAPI
 
 from easyrag import __version__
 from easyrag.api.errors import register_error_handlers
-from easyrag.api.routes import health, retrieve
+from easyrag.api.routes import chat, health, retrieve
 from easyrag.config import Settings
 from easyrag.container import ContainerFactory, build_container
 from easyrag.observability.logging import configure_logging
@@ -45,4 +45,5 @@ def create_app(
     register_error_handlers(app)
     app.include_router(health.router)
     app.include_router(retrieve.router)
+    app.include_router(chat.router)
     return app

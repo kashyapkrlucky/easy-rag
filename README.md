@@ -4,7 +4,7 @@ A self-hosted, local-first Retrieval-Augmented Generation system for your Markdo
 documents. It runs entirely on your machine — Python, FastAPI, PostgreSQL + pgvector and
 Ollama — with no external SaaS.
 
-> **Status: Phase 12 — Ollama LLM generation.** Index your documents with `easyrag index`, then search them with `POST /api/v1/retrieve`. The chat model runs in the stack; the chat endpoint arrives in the next phase.
+> **Status: Phase 13 — RAG pipeline.** Ask questions with `POST /api/v1/chat`. Citations and grounding checks arrive in the next phase.
 > See [ROADMAP.md](ROADMAP.md) for progress.
 
 ## What it will do
@@ -87,6 +87,31 @@ docker compose run --rm app easyrag index --rebuild
 
 Exit codes: `0` success, `1` some documents failed, `2` configuration problem,
 `3` embedding model unavailable. Automatic and incremental indexing arrive in a later phase.
+
+### Asking questions
+
+```bash
+curl -s localhost:8000/api/v1/chat -H 'Content-Type: application/json' \
+  -d '{"question": "How do I deploy the application with Docker?"}'
+```
+
+```json
+{
+  "answer": "1. Copy `.env.example` to `.env` and set `POSTGRES_PASSWORD`. 2. Put your Markdown files in `./docs`. 3. Run `docker compose up -d` …",
+  "truncated": false,
+  "sources": [
+    {"document": "guides/deployment.md", "title": "Deployment Guide", "section": "Docker Deployment",
+     "heading_path": ["Deployment", "Docker Deployment"], "anchor": "docker-deployment",
+     "lines": [10, 12], "score": 0.742, "chunk_id": "…"}
+  ]
+}
+```
+
+The model is instructed to answer only from your documents and to reply
+`I don't know based on the provided documents.` otherwise. With the default small model,
+answers take roughly 10–35 s on CPU. **Current limitation:** a small model can still
+ignore these instructions, for example by following instructions written inside a
+document. Grounding checks and citations arrive in the next phase.
 
 ### Searching
 

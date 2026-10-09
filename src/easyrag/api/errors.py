@@ -19,6 +19,7 @@ from sqlalchemy.exc import DBAPIError
 
 from easyrag.domain.errors import IndexIncompatibleError
 from easyrag.embeddings.base import EmbeddingProviderUnavailableError, EmbeddingResponseError
+from easyrag.llm.base import LLMProviderUnavailableError, LLMResponseError
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +54,22 @@ async def _embedding_response(request: Request, exc: Exception) -> JSONResponse:
     )
 
 
+async def _llm_unavailable(request: Request, exc: Exception) -> JSONResponse:
+    logger.warning("LLM provider unavailable: %s", exc)
+    return error_response(
+        status.HTTP_503_SERVICE_UNAVAILABLE,
+        "llm_unavailable",
+        f"The chat model is unavailable: {exc}",
+    )
+
+
+async def _llm_response(request: Request, exc: Exception) -> JSONResponse:
+    logger.error("LLM provider failed: %s", exc)
+    return error_response(
+        status.HTTP_502_BAD_GATEWAY, "llm_failed", f"The chat model failed: {exc}"
+    )
+
+
 async def _index_incompatible(request: Request, exc: Exception) -> JSONResponse:
     logger.error("%s", exc)
     return error_response(status.HTTP_503_SERVICE_UNAVAILABLE, "index_incompatible", str(exc))
@@ -76,6 +93,8 @@ def register_error_handlers(app: FastAPI) -> None:
     app.add_exception_handler(RequestValidationError, _validation_error)
     app.add_exception_handler(EmbeddingProviderUnavailableError, _embedding_unavailable)
     app.add_exception_handler(EmbeddingResponseError, _embedding_response)
+    app.add_exception_handler(LLMProviderUnavailableError, _llm_unavailable)
+    app.add_exception_handler(LLMResponseError, _llm_response)
     app.add_exception_handler(IndexIncompatibleError, _index_incompatible)
     app.add_exception_handler(DBAPIError, _database_error)
     app.add_exception_handler(Exception, _unexpected_error)

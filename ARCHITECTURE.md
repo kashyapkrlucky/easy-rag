@@ -185,7 +185,7 @@ easy-rag/
 │   │   ├── fake.py                   (P11)
 │   │   └── ollama.py                 (P12)
 │   ├── rag/
-│   │   ├── prompt.py                 (P13)
+│   │   ├── prompt.py                 (P13) versioned grounded prompt + token budget
 │   │   ├── service.py                (P13)
 │   │   └── citations.py              (P14)
 │   ├── observability/
@@ -586,6 +586,8 @@ is caught before any vector is stored.
 
 The threshold is **disabled by default** until Phase 19 calibrates it, because similarity
 scales differ between embedding models.
+*Phase 13 implemented layer 2 (without citations), and live testing showed why layer 1 and
+Phase 14's validation are needed. See D29.*
 
 **D13 — Citations via inline markers, validated server-side.** Small local models produce
 `[1]`-style markers far more reliably than strict JSON. The server parses markers,
@@ -757,6 +759,43 @@ Readiness `llm_model` is `missing` until the model is pulled, and `misconfigured
 model's native `context_length` is below the configured window. `ollama-pull` fetches both
 models.
 
+
+**D29 — RAG orchestration and prompt v2 (Phase 13).**
+- `RagService` depends only on the `Retriever` and `LLMProvider` ports and the
+  `PromptBuilder`. A test enforces the layer rules: `domain` is pure, and `ingestion`,
+  `retrieval` and `rag` import no web, database, HTTP or Ollama code.
+- **Prompt layout:** the system message carries the rules. The user message carries the
+  `<source id document section>` blocks, then the rules **restated**, then the question.
+  A literal `</source>` in a document is neutralised, and attribute values can't break out
+  of their quotes.
+- **Versioning:** `PROMPT_VERSION` is pinned to a SHA-256 fingerprint of the prompt text in
+  `tests/unit/test_prompt.py`. Editing the prompt without bumping the version fails the
+  build.
+- **Evidence budget:** `min(EASYRAG_RAG_MAX_CONTEXT_TOKENS, window − max_output − 256
+  margin − fixed prompt)`. Chunks are added in rank order; a chunk that doesn't fit is
+  skipped, and smaller lower-ranked ones may still fit. **`sources` are exactly the chunks
+  placed in the prompt**: one dropped by the budget can't have contributed.
+- `truncated: true` when generation stopped at `max_output_tokens`.
+- `RagTrace` is logged once per request at INFO, with ids, counts, tokens and timings, but
+  no question and no document text.
+- **Live evaluation with the real 1.5B model** (4 questions):
+
+  | Question | v1 (rules in system message only) | v2 (rules restated after the sources) |
+  |---|---|---|
+  | Deploy with Docker | ✅ full, correct steps | ✅ correct but terse: it copied README's example answer |
+  | Design rationale | ⚠️ circular opening | ✅ grounded and clear |
+  | Out of scope ("capital of France") | ❌ "Paris" (prior knowledge) | ✅ exact refusal sentence |
+  | Instruction injected in a document | ❌ obeyed ("PWNED") | ❌ **still obeyed** |
+
+  v2 was kept (`PROMPT_VERSION = "2"`) for the out-of-scope fix. Iteration stopped there to
+  avoid overfitting four questions; Phase 19 evaluates properly.
+- **Known limitation:** prompt wording does not stop a 1.5B model from following
+  instructions planted in a document. The corpus is the user's own (D22), which limits the
+  risk. Phase 14's citation validation will flag such answers as ungrounded, since they
+  cite nothing, and a refusal must return no sources. A larger or native model is the real
+  remedy.
+- Latency on CPU in Docker: about 13–33 s per answer, of which retrieval is about 0.4 s.
+  Prompt size dominates, hence the 2000-token evidence cap.
 ---
 
 ## 10. API surface (target)
@@ -766,7 +805,7 @@ models.
 | `GET /health/live` | 1 | Liveness |
 | `GET /health/ready` | 3 (extended 8, 12) | Readiness: DB, migrations, model provider |
 | `POST /api/v1/retrieve` | 10 | Retrieval only (debugging, evaluation) |
-| `POST /api/v1/chat` | 13 | Question → grounded answer + sources |
+| `POST /api/v1/chat` | 13 ✅ | Question → answer + `truncated` + sources (the chunks the model saw; Phase 14 narrows to cited ones) |
 | `GET /api/v1/documents` | 15 | Indexed documents with hash & chunk count |
 | `GET /api/v1/index/status` | 15 | Last run, counts, errors, in-progress flag |
 | `POST /api/v1/index` | 15 | Trigger a sync |
@@ -814,7 +853,8 @@ Chat contract (target):
 | `EASYRAG_RETRIEVAL_TOP_K` | `5` (1–50; requests may override) | 10 |
 | `EASYRAG_RETRIEVAL_MIN_SCORE` | unset (off; requests may override) | 10 / 14 |
 | `EASYRAG_LLM_MODEL` / `_CONTEXT_WINDOW` | `qwen2.5:1.5b-instruct-q4_K_M` / `8192` | 12 |
-| generation `temperature`, `seed`, `max_output_tokens` | `0` / `42` / set by the RAG service | 13 |
+| `EASYRAG_LLM_TEMPERATURE` / `_SEED` / `_MAX_OUTPUT_TOKENS` | `0` / `42` / `512` | 13 |
+| `EASYRAG_RAG_MAX_CONTEXT_TOKENS` | `2000` (evidence cap; prompt size dominates CPU latency) | 13 |
 | `EASYRAG_INDEX_ON_STARTUP` | `true` | 15 |
 | `EASYRAG_WATCH_ENABLED` / `_FORCE_POLLING` | `true` / `false` | 16 |
 | `EASYRAG_API_KEY` | unset (auth off) | 22 |

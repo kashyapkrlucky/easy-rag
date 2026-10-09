@@ -18,8 +18,10 @@ from easyrag.ingestion.chunker import Chunker, ChunkingConfig
 from easyrag.ingestion.indexer import Indexer
 from easyrag.ingestion.loader import FilesystemMarkdownLoader
 from easyrag.ingestion.markdown import MarkdownParser
-from easyrag.llm.base import LLMProvider
+from easyrag.llm.base import GenerationOptions, LLMProvider
 from easyrag.llm.ollama import OllamaLLMProvider
+from easyrag.rag.prompt import PromptBuilder
+from easyrag.rag.service import RagService
 from easyrag.retrieval.base import Retriever
 from easyrag.retrieval.vector import VectorRetriever
 from easyrag.storage.database import create_engine, ping
@@ -40,6 +42,7 @@ class AppContainer:
     llm: LLMProvider
     indexer: Indexer
     retriever: Retriever
+    rag: RagService
     # Reported by /health/ready, in this order.
     readiness_checks: Mapping[str, ReadinessCheck]
 
@@ -93,6 +96,21 @@ def build_container(settings: Settings) -> AppContainer:
         default_min_score=settings.retrieval_min_score,
     )
 
+    rag = RagService(
+        retriever=retriever,
+        llm=llm,
+        prompt_builder=PromptBuilder(
+            context_window=llm.context_window,
+            max_output_tokens=settings.llm_max_output_tokens,
+            max_context_tokens=settings.rag_max_context_tokens,
+        ),
+        generation_options=GenerationOptions(
+            temperature=settings.llm_temperature,
+            seed=settings.llm_seed,
+            max_output_tokens=settings.llm_max_output_tokens,
+        ),
+    )
+
     async def database() -> CheckStatus:
         await ping(engine, settings.health_check_timeout_seconds)
         return "ok"
@@ -112,6 +130,7 @@ def build_container(settings: Settings) -> AppContainer:
         llm=llm,
         indexer=indexer,
         retriever=retriever,
+        rag=rag,
         readiness_checks={
             "database": database,
             "schema": schema,
