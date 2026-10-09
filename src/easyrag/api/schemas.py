@@ -1,6 +1,6 @@
 """Request and response models of the public HTTP API (v1)."""
 
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, StringConstraints
 
@@ -79,14 +79,21 @@ class SourceResponse(BaseModel):
 
 
 class ChatResponse(BaseModel):
-    answer: str
+    answer: str = Field(description='Answer text; "[k]" cites sources[k - 1]')
+    status: Literal["answered", "insufficient_evidence", "ungrounded"] = Field(
+        description="answered: cites the documents; insufficient_evidence: the documents do "
+        "not answer the question; ungrounded: the answer cites no source (unverified)"
+    )
+    grounded: bool = Field(description="False only when status is 'ungrounded'")
     truncated: bool = Field(description="True if the answer was cut off by the output limit")
-    sources: list[SourceResponse] = Field(description="The document sections given to the model")
+    sources: list[SourceResponse] = Field(description="The cited document sections, in order")
 
     @classmethod
     def from_domain(cls, answer: Answer) -> "ChatResponse":
         return cls(
             answer=answer.text,
+            status=answer.status,
+            grounded=answer.grounded,
             truncated=answer.truncated,
             sources=[SourceResponse.from_domain(chunk) for chunk in answer.sources],
         )

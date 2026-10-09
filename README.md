@@ -4,7 +4,7 @@ A self-hosted, local-first Retrieval-Augmented Generation system for your Markdo
 documents. It runs entirely on your machine — Python, FastAPI, PostgreSQL + pgvector and
 Ollama — with no external SaaS.
 
-> **Status: Phase 13 — RAG pipeline.** Ask questions with `POST /api/v1/chat`. Citations and grounding checks arrive in the next phase.
+> **Status: Phase 14 — grounded answers with citations.** Ask questions with `POST /api/v1/chat` and get answers with the document sections they came from. Indexing is still manual (`easyrag index`).
 > See [ROADMAP.md](ROADMAP.md) for progress.
 
 ## What it will do
@@ -97,21 +97,30 @@ curl -s localhost:8000/api/v1/chat -H 'Content-Type: application/json' \
 
 ```json
 {
-  "answer": "1. Copy `.env.example` to `.env` and set `POSTGRES_PASSWORD`. 2. Put your Markdown files in `./docs`. 3. Run `docker compose up -d` …",
+  "answer": "The support response time is one business day [1].",
+  "status": "answered",
+  "grounded": true,
   "truncated": false,
   "sources": [
-    {"document": "guides/deployment.md", "title": "Deployment Guide", "section": "Docker Deployment",
-     "heading_path": ["Deployment", "Docker Deployment"], "anchor": "docker-deployment",
-     "lines": [10, 12], "score": 0.742, "chunk_id": "…"}
+    {"document": "support.md", "title": "Support", "section": "Contact",
+     "heading_path": ["Support", "Contact"], "anchor": "contact",
+     "lines": [5, 5], "score": 0.71, "chunk_id": "…"}
   ]
 }
 ```
 
-The model is instructed to answer only from your documents and to reply
-`I don't know based on the provided documents.` otherwise. With the default small model,
-answers take roughly 10–35 s on CPU. **Current limitation:** a small model can still
-ignore these instructions, for example by following instructions written inside a
-document. Grounding checks and citations arrive in the next phase.
+- `[k]` in the answer refers to `sources[k-1]`. `sources` lists only the sections the answer
+  is based on.
+- `status` is `answered`, or `insufficient_evidence` when your documents don't answer the
+  question. The answer is then `I don't know based on the provided documents.` and
+  `sources` is empty.
+- **Answers are verified, not just requested.** When the model doesn't cite, EasyRAG checks
+  that the answer's content, including every number, comes from the sources it was shown.
+  If nothing supports the answer, you get the "I don't know" reply instead. Set
+  `EASYRAG_RAG_UNGROUNDED_POLICY=flag` to receive such answers marked `"grounded": false`.
+- With the default small model, answers take roughly 5–35 s on CPU.
+- **Known limitation:** a small model can still be manipulated by instructions written
+  *inside* a document (prompt injection). Only index documents you trust.
 
 ### Searching
 

@@ -143,9 +143,11 @@ Decision references (D1–D24) point to [ARCHITECTURE.md §9](ARCHITECTURE.md#9-
 
 ### Phase 14 — Grounded answers and citations
 - **Objective:** `[n]` citation markers, a parser/validator, cited-only sources, the `grounded` flag, the evidence gate that skips the LLM, and an exact refusal sentence. (D12, D13)
-- **Files:** `rag/citations.py`, `rag/prompt.py`, `rag/service.py`, schemas
-- **Tests:** invalid or out-of-range markers dropped; duplicate markers; refusal detection; the gate bypasses the LLM (the fake asserts it was not called).
-- **Carried over from Phase 13's live testing:** a refusal must return **no** sources (today it lists every retrieved chunk), and an answer citing nothing must be `grounded: false`. This is what flags the prompt-injection case.
+- **Files:** `rag/citations.py`, `rag/attribution.py` (server-side support check, added after measurement), `rag/prompt.py` (v4: citation rule + worked examples + `prompt_fingerprint()`), `rag/service.py`, `domain/answers.py` (`Outcome`, status), schemas, `EASYRAG_RAG_UNGROUNDED_POLICY`.
+- **Tests:** citation parsing (forms, renumbering, invalid/duplicate markers, code like `items[0]`); refusal detection (variants, buried refusals); attribution (copied, multi-source, unsupported, coverage threshold, numbers must match, stopwords); service (every outcome, gate bypasses the LLM, both policies, explicit over inferred); API (`status`/`grounded`); integration (empty index refuses without calling the model); fingerprint guard mutation-tested on an example edit.
+- **Done from Phase 13's carry-over:** refusals return no sources; uncited answers are verified or refused.
+- **Live result (D30):** with the 1.5B model, 6/6 answerable questions answered with correct sources (via inference where the model didn't cite); unanswerable questions refused. Prompt injection remains a known limitation.
+- **Status:** ✅ done
 - **Commit:** `feat: add grounded answers with source citations`
 
 ### Phase 15 — Automatic, incremental indexing
@@ -173,6 +175,7 @@ Decision references (D1–D24) point to [ARCHITECTURE.md §9](ARCHITECTURE.md#9-
 ### Phase 19 — Evaluation
 - **Objective:** a dataset format (question, expected document/section, answerable flag, key facts), metrics (recall@k, MRR, citation precision/recall, refusal accuracy, latency p50/p95) and an `easyrag eval` CLI writing a JSON report; calibrate the default similarity threshold.
 - **Files:** `evaluation/`, `eval/datasets/`
+- **Must include (from Phases 13–14):** faithfulness beyond lexical support; injection cases; outcome and attribution rates (explicit vs inferred); calibration of the attribution thresholds (D30) alongside the similarity threshold; a corpus free of evaluation notes.
 - **Commit:** `feat: add RAG evaluation framework`
 
 ### Phase 20 — Structured logging and metrics

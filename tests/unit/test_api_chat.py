@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 
 from easyrag.config import Settings
 from easyrag.container import AppContainer, build_container
-from easyrag.domain.answers import Answer, RagTrace
+from easyrag.domain.answers import Answer, AnswerStatus, Outcome, RagTrace
 from easyrag.domain.chunks import RetrievedChunk
 from easyrag.embeddings.base import EmbeddingProviderUnavailableError
 from easyrag.llm.base import LLMProviderUnavailableError, LLMResponseError
@@ -25,11 +25,15 @@ SOURCE = RetrievedChunk(
     score=0.7421234,
 )
 TRACE = RagTrace(
-    prompt_version="1",
+    prompt_version="3",
+    outcome=Outcome.ANSWERED,
     llm_model="fake",
     retrieved=(("c" * 32, 0.74),),
     included_chunk_ids=("c" * 32,),
     excluded_chunk_ids=(),
+    cited_chunk_ids=("c" * 32,),
+    invalid_citations=0,
+    attribution="explicit",
     prompt_tokens_estimate=100,
     prompt_tokens=98,
     completion_tokens=12,
@@ -38,6 +42,15 @@ TRACE = RagTrace(
     generation_seconds=1.0,
     total_seconds=1.1,
 )
+
+
+def make_answer(
+    text: str = "Use docker compose up [1].",
+    status: AnswerStatus = "answered",
+    sources: tuple[RetrievedChunk, ...] = (SOURCE,),
+    truncated: bool = False,
+) -> Answer:
+    return Answer("q", text, status, sources, truncated, TRACE)
 
 
 class StubRag:
@@ -62,15 +75,16 @@ def client_with(settings: Settings, rag: StubRag) -> TestClient:
 
 
 def test_chat_returns_answer_and_sources(make_settings: SettingsFactory) -> None:
-    answer = Answer("How do I deploy?", "Use docker compose up.", (SOURCE,), False, TRACE)
-    rag = StubRag(answer)
+    rag = StubRag(make_answer())
 
     with client_with(make_settings(), rag) as client:
         response = client.post("/api/v1/chat", json={"question": " How do I deploy? ", "top_k": 4})
 
     assert response.status_code == 200
     assert response.json() == {
-        "answer": "Use docker compose up.",
+        "answer": "Use docker compose up [1].",
+        "status": "answered",
+        "grounded": True,
         "truncated": False,
         "sources": [
             {
@@ -89,10 +103,25 @@ def test_chat_returns_answer_and_sources(make_settings: SettingsFactory) -> None
 
 
 def test_truncated_answers_are_flagged(make_settings: SettingsFactory) -> None:
-    rag = StubRag(Answer("q", "partial", (), True, TRACE))
+    rag = StubRag(make_answer("partial [1]", truncated=True))
 
     with client_with(make_settings(), rag) as client:
         assert client.post("/api/v1/chat", json={"question": "q"}).json()["truncated"] is True
+
+
+@pytest.mark.parametrize(
+    ("status", "grounded"),
+    [("insufficient_evidence", True), ("ungrounded", False)],
+)
+def test_unanswered_statuses_have_no_sources(
+    make_settings: SettingsFactory, status: AnswerStatus, grounded: bool
+) -> None:
+    rag = StubRag(make_answer("I don't know based on the provided documents.", status, ()))
+
+    with client_with(make_settings(), rag) as client:
+        body = client.post("/api/v1/chat", json={"question": "q"}).json()
+
+    assert (body["status"], body["grounded"], body["sources"]) == (status, grounded, [])
 
 
 @pytest.mark.parametrize(
@@ -101,7 +130,7 @@ def test_truncated_answers_are_flagged(make_settings: SettingsFactory) -> None:
 def test_invalid_requests_are_rejected(
     make_settings: SettingsFactory, payload: dict[str, Any]
 ) -> None:
-    rag = StubRag(Answer("q", "a", (), False, TRACE))
+    rag = StubRag(make_answer())
 
     with client_with(make_settings(), rag) as client:
         response = client.post("/api/v1/chat", json=payload)

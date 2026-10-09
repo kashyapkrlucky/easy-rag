@@ -73,6 +73,9 @@ class Settings(BaseSettings):
     # Upper bound on retrieved evidence in the prompt, in estimated tokens. Prompt size
     # dominates latency on CPU (~30 s for a 3k-token prompt measured in Docker on macOS).
     rag_max_context_tokens: int = Field(default=2000, ge=200, le=200000)
+    # A reply citing no source: "refuse" replaces it with the refusal sentence,
+    # "flag" returns it marked as ungrounded (ARCHITECTURE D30).
+    rag_ungrounded_policy: Literal["refuse", "flag"] = "refuse"
 
     # --- Embeddings --------------------------------------------------------------------
     # Pin a tag, not "latest": a silently updated model would change every vector.

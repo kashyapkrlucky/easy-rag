@@ -109,6 +109,7 @@ def build_container(settings: Settings) -> AppContainer:
             seed=settings.llm_seed,
             max_output_tokens=settings.llm_max_output_tokens,
         ),
+        ungrounded_policy=settings.rag_ungrounded_policy,
     )
 
     async def database() -> CheckStatus:
