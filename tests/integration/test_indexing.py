@@ -6,9 +6,10 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
+from easyrag.domain.errors import IndexIncompatibleError
 from easyrag.embeddings.fake import FakeEmbeddingProvider
 from easyrag.ingestion.chunker import Chunker
-from easyrag.ingestion.indexer import Indexer, IndexIncompatibleError
+from easyrag.ingestion.indexer import Indexer
 from easyrag.ingestion.loader import FilesystemMarkdownLoader
 from easyrag.ingestion.markdown import MarkdownParser
 from easyrag.storage.index_store import PostgresIndexStore, vector_index_name

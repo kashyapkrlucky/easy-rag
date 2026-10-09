@@ -172,9 +172,9 @@ easy-rag/
 │   │   ├── migrate.py                (P4)  upgrade_to_head, schema_status
 │   │   ├── migrations/               (P4)  Alembic env + versions, shipped in the package
 │   │   ├── index_store.py            (P9)  PostgresIndexStore (write side, vector index, guard)
-│   │   └── vector_store.py           (P10) search (read side)
+│   │   └── vector_store.py           (P10) PostgresVectorStore: k-NN search (read side)
 │   ├── retrieval/
-│   │   ├── base.py                   (P10) Retriever Protocol
+│   │   ├── base.py                   (P10) Retriever + VectorSearch Protocols
 │   │   ├── vector.py                 (P10)
 │   │   ├── keyword.py                (P17)
 │   │   ├── hybrid.py                 (P17) reciprocal rank fusion
@@ -622,6 +622,37 @@ safety net, and because indexing is idempotent (D10), it's cheap.
 `LLMProviderUnavailable`, `DocumentParseError`, ...). The API maps them to HTTP status codes
 (503 when a dependency is unavailable, 422 for validation errors) with a stable error body.
 A single malformed document is logged and skipped; it never aborts the whole index run.
+*Implemented in Phase 10* (`api/errors.py`): every error, including FastAPI validation
+errors, is `{"error": {"code", "message", "details"?}}`.
+
+| Exception | HTTP | `code` |
+|---|---|---|
+| `RequestValidationError` | 422 | `validation_error` (with `details`) |
+| `EmbeddingProviderUnavailableError` | 503 | `embedding_unavailable` |
+| `EmbeddingResponseError` | 502 | `embedding_failed` |
+| `IndexIncompatibleError` (now in `domain/errors.py`) | 503 | `index_incompatible` (message says how to rebuild) |
+| SQLAlchemy `DBAPIError` | 503 | `database_unavailable`, with a generic message (the DSN is never returned) |
+| anything else | 500 | `internal_error`, with a generic message; the traceback is logged |
+
+**D27 — Deterministic, index-friendly k-NN query (Phase 10).** pgvector's HNSW index serves
+only a *single* `ORDER BY <distance>` that matches the index expression. A tie-breaker in the
+same query (`ORDER BY distance, id`) silently falls back to a full scan and sort. So
+`storage/vector_store.search_sql`:
+- has an inner query that orders by `embedding::vector(N) <=> CAST(:query AS vector(N))`
+  with `LIMIT k`, which uses the index (verified by `EXPLAIN` on the production SQL);
+- has an outer query that re-sorts by `(distance, chunk_id)`, so equal scores always come
+  back in the same order (tested with identical vectors);
+- applies `min_score` **after** the top-k selection, which predictably means "top k, minus
+  those below the threshold". Filtering inside an approximate index scan can silently
+  return fewer results.
+- filters by `embedding_model` as defence in depth, while the search refuses a mismatched
+  `index_state` with `IndexIncompatibleError`. Vectors from different models are never
+  compared.
+
+Measured on the sample corpus (78 chunks, CPU Ollama in Docker): about 45–50 ms per warm
+request, including the query embedding. On the same corpus, tightly packed scores
+(e.g. 0.685 / 0.681 / 0.679) show the limits of dense-only retrieval with a small model.
+Phases 17–19 (hybrid search, reranking, evaluation) target exactly this.
 
 **D22 — Documents are trusted-ish input.** The corpus is the user's own content, but
 context is still wrapped in clear delimiters, and the prompt states that context text is
@@ -715,8 +746,8 @@ Chat contract (target):
 | `EASYRAG_EMBEDDING_MODEL` / `_DIMENSION` | `nomic-embed-text:v1.5` / `768` | 8 |
 | `EASYRAG_EMBEDDING_BATCH_SIZE` | `32` | 8 |
 | `EASYRAG_EMBEDDING_QUERY_PREFIX` / `_DOCUMENT_PREFIX` | `"search_query: "` / `"search_document: "` | 8 |
-| `EASYRAG_RETRIEVAL_TOP_K` | `5` | 10 |
-| `EASYRAG_RETRIEVAL_MIN_SCORE` | unset (gate off) | 10 / 14 |
+| `EASYRAG_RETRIEVAL_TOP_K` | `5` (1–50; requests may override) | 10 |
+| `EASYRAG_RETRIEVAL_MIN_SCORE` | unset (off; requests may override) | 10 / 14 |
 | `EASYRAG_LLM_MODEL`, `_NUM_CTX`, `_TEMPERATURE`, `_SEED` | chosen in P12 / 8192 / 0 / 42 | 12 |
 | `EASYRAG_INDEX_ON_STARTUP` | `true` | 15 |
 | `EASYRAG_WATCH_ENABLED` / `_FORCE_POLLING` | `true` / `false` | 16 |

@@ -13,8 +13,9 @@ from sqlalchemy import Table, delete, func, insert, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
+from easyrag.domain.errors import IndexIncompatibleError
 from easyrag.health import CheckStatus
-from easyrag.ingestion.indexer import DocumentToStore, IndexIncompatibleError
+from easyrag.ingestion.indexer import DocumentToStore
 from easyrag.storage.models import APP_MANAGED_INDEX_PREFIX, Chunk, Document, IndexState
 
 logger = logging.getLogger(__name__)
@@ -50,7 +51,7 @@ class PostgresIndexStore:
                 )
                 .on_conflict_do_nothing(index_elements=["key"])
             )
-            state = await _read_state(connection)
+            state = await read_index_state(connection)
             stored_model, stored_dimension = state[MODEL_KEY], int(state[DIMENSION_KEY])
             if (stored_model, stored_dimension) != (embedding_model, dimension):
                 raise IndexIncompatibleError(
@@ -125,7 +126,7 @@ class PostgresIndexStore:
     async def compatibility(self, embedding_model: str, dimension: int) -> CheckStatus:
         """Readiness: "misconfigured" when the index was built with another model/dimension."""
         async with self._engine.connect() as connection:
-            state = await _read_state(connection)
+            state = await read_index_state(connection)
         if not state:
             return "ok"  # nothing indexed yet
         if (state.get(MODEL_KEY), state.get(DIMENSION_KEY)) != (embedding_model, str(dimension)):
@@ -141,7 +142,8 @@ class PostgresIndexStore:
         return "ok"
 
 
-async def _read_state(connection: AsyncConnection) -> Mapping[str, str]:
+async def read_index_state(connection: AsyncConnection) -> Mapping[str, str]:
+    """The recorded embedding model and dimension ({} when nothing has been indexed)."""
     rows = await connection.execute(
         select(_index_state.c.key, _index_state.c.value).where(
             _index_state.c.key.in_([MODEL_KEY, DIMENSION_KEY])

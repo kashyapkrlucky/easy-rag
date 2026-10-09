@@ -15,8 +15,9 @@ from collections.abc import Sequence
 
 from easyrag.config import Settings
 from easyrag.container import build_container
+from easyrag.domain.errors import IndexIncompatibleError
 from easyrag.embeddings.base import EmbeddingProviderUnavailableError
-from easyrag.ingestion.indexer import IndexIncompatibleError, IndexReport
+from easyrag.ingestion.indexer import IndexReport
 from easyrag.observability.logging import configure_logging
 
 EXIT_OK = 0

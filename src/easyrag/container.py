@@ -18,9 +18,12 @@ from easyrag.ingestion.chunker import Chunker, ChunkingConfig
 from easyrag.ingestion.indexer import Indexer
 from easyrag.ingestion.loader import FilesystemMarkdownLoader
 from easyrag.ingestion.markdown import MarkdownParser
+from easyrag.retrieval.base import Retriever
+from easyrag.retrieval.vector import VectorRetriever
 from easyrag.storage.database import create_engine, ping
 from easyrag.storage.index_store import PostgresIndexStore
 from easyrag.storage.migrate import SchemaStatus, schema_status
+from easyrag.storage.vector_store import PostgresVectorStore
 
 # Connecting should be fast even when a request (model load + inference) is slow.
 _OLLAMA_CONNECT_TIMEOUT_SECONDS = 5.0
@@ -33,6 +36,7 @@ class AppContainer:
     http_client: httpx2.AsyncClient
     embeddings: EmbeddingProvider
     indexer: Indexer
+    retriever: Retriever
     # Reported by /health/ready, in this order.
     readiness_checks: Mapping[str, ReadinessCheck]
 
@@ -75,6 +79,13 @@ def build_container(settings: Settings) -> AppContainer:
         store=index_store,
     )
 
+    retriever = VectorRetriever(
+        embeddings=embeddings,
+        search=PostgresVectorStore(engine),
+        default_top_k=settings.retrieval_top_k,
+        default_min_score=settings.retrieval_min_score,
+    )
+
     async def database() -> CheckStatus:
         await ping(engine, settings.health_check_timeout_seconds)
         return "ok"
@@ -92,6 +103,7 @@ def build_container(settings: Settings) -> AppContainer:
         http_client=http_client,
         embeddings=embeddings,
         indexer=indexer,
+        retriever=retriever,
         readiness_checks={
             "database": database,
             "schema": schema,

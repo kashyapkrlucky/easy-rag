@@ -4,7 +4,7 @@ A self-hosted, local-first Retrieval-Augmented Generation system for your Markdo
 documents. It runs entirely on your machine — Python, FastAPI, PostgreSQL + pgvector and
 Ollama — with no external SaaS.
 
-> **Status: Phase 9 — indexing into pgvector.** `easyrag index` loads, chunks, embeds and stores your documents. Search and chat are not available yet.
+> **Status: Phase 10 — vector retrieval.** Index your documents with `easyrag index`, then search them with `POST /api/v1/retrieve`. Chat (answer generation) is not available yet.
 > See [ROADMAP.md](ROADMAP.md) for progress.
 
 ## What it will do
@@ -82,6 +82,36 @@ docker compose run --rm app easyrag index --rebuild
 
 Exit codes: `0` success, `1` some documents failed, `2` configuration problem,
 `3` embedding model unavailable. Automatic and incremental indexing arrive in a later phase.
+
+### Searching
+
+`POST /api/v1/retrieve` returns the most similar sections, best first. It does
+retrieval only, without generation, which is useful for checking what the system would
+use as evidence:
+
+```bash
+curl -s localhost:8000/api/v1/retrieve -H 'Content-Type: application/json' \
+  -d '{"query": "How do I deploy the application?", "top_k": 3}'
+```
+
+```json
+{
+  "query": "How do I deploy the application?",
+  "embedding_model": "ollama/nomic-embed-text:v1.5+p:eb869adb",
+  "results": [
+    {
+      "document": "guides/deployment.md", "title": "Deployment Guide",
+      "section": "Docker Deployment", "heading_path": ["Deployment", "Docker Deployment"],
+      "anchor": "docker-deployment", "lines": [10, 12], "score": 0.742,
+      "chunk_id": "…", "content": "1. Copy `.env.example` …"
+    }
+  ]
+}
+```
+
+`top_k` (1–50, default `EASYRAG_RETRIEVAL_TOP_K`) and `min_score` (cosine similarity,
+default off) are optional. Errors always have the shape
+`{"error": {"code": "...", "message": "..."}}`.
 
 The API is published on `127.0.0.1` only. Set `EASYRAG_PORT` in `.env` to change the host port.
 PostgreSQL is not published to the host.

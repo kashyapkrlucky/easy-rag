@@ -4,6 +4,7 @@ from typing import Any
 
 import pytest
 
+from easyrag.domain.errors import IndexIncompatibleError
 from easyrag.embeddings.base import (
     EmbeddingProviderUnavailableError,
     EmbeddingResponseError,
@@ -11,12 +12,7 @@ from easyrag.embeddings.base import (
 )
 from easyrag.embeddings.fake import FakeEmbeddingProvider
 from easyrag.ingestion.chunker import Chunker, ChunkingConfig
-from easyrag.ingestion.indexer import (
-    DocumentToStore,
-    Indexer,
-    IndexIncompatibleError,
-    pipeline_fingerprint,
-)
+from easyrag.ingestion.indexer import DocumentToStore, Indexer, pipeline_fingerprint
 from easyrag.ingestion.loader import FilesystemMarkdownLoader
 from easyrag.ingestion.markdown import MarkdownParser
 

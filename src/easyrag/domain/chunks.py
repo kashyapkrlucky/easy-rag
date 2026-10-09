@@ -23,3 +23,24 @@ class Chunk:
     end_line: int
     # estimate_tokens(embed_text)
     token_estimate: int
+
+
+@dataclass(frozen=True, slots=True)
+class RetrievedChunk:
+    """A chunk returned by retrieval, with what citations need."""
+
+    chunk_id: str
+    source_path: str
+    document_title: str
+    heading_path: tuple[str, ...]
+    section_anchor: str
+    content: str
+    start_line: int
+    end_line: int
+    # Cosine similarity in [-1, 1]; higher is more similar.
+    score: float
+
+    @property
+    def section(self) -> str:
+        """Human-readable section name: the deepest heading, or the title for a preamble."""
+        return self.heading_path[-1] if self.heading_path else self.document_title

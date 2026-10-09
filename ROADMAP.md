@@ -111,8 +111,9 @@ Decision references (D1–D24) point to [ARCHITECTURE.md §9](ARCHITECTURE.md#9-
 
 ### Phase 10 — Vector similarity retrieval
 - **Objective:** the `Retriever` Protocol + `VectorRetriever`, with configurable top-k, an optional min score and deterministic tie-breaking; a `POST /api/v1/retrieve` debug endpoint.
-- **Files:** `retrieval/{base,vector}.py`, `api/schemas.py`, `api/errors.py`, `api/routes/retrieve.py`
-- **Tests:** unit with an in-memory store; integration: a known query returns the expected section first; the threshold filters results.
+- **Files:** `retrieval/{base,vector}.py`, `storage/vector_store.py`, `domain/errors.py`, `RetrievedChunk`, `api/{schemas,errors}.py`, `api/routes/retrieve.py`, retrieval settings.
+- **Tests:** unit: retriever (query embedding, model/dimension passthrough, overrides, validation); API (response shape, validation, every error mapping, no DSN leak on database errors, generic 500). Integration, with real pgvector: best section first, cosine scores in order, top-k, threshold applied after top-k, tie-breaking by chunk ID, empty index, cross-model refusal, `EXPLAIN` of the production query uses HNSW.
+- **Status:** ✅ done
 - **Commit:** `feat: add vector similarity retrieval`
 
 ### Phase 11 — LLM provider abstraction

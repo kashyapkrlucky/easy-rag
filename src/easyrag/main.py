@@ -10,7 +10,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from easyrag import __version__
-from easyrag.api.routes import health
+from easyrag.api.errors import register_error_handlers
+from easyrag.api.routes import health, retrieve
 from easyrag.config import Settings
 from easyrag.container import ContainerFactory, build_container
 from easyrag.observability.logging import configure_logging
@@ -41,5 +42,7 @@ def create_app(
             logger.info("EasyRAG shut down")
 
     app = FastAPI(title="EasyRAG", version=__version__, lifespan=lifespan)
+    register_error_handlers(app)
     app.include_router(health.router)
+    app.include_router(retrieve.router)
     return app

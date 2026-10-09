@@ -45,6 +45,12 @@ class Settings(BaseSettings):
     chunk_max_tokens: int = Field(default=400, ge=32, le=8192)
     chunk_overlap_tokens: int = Field(default=50, ge=0)
 
+    # --- Retrieval ---------------------------------------------------------------------
+    retrieval_top_k: int = Field(default=5, ge=1, le=50)
+    # Minimum cosine similarity for a chunk to be returned. Off by default: useful values
+    # are model-specific and must be calibrated on your documents (ARCHITECTURE D12).
+    retrieval_min_score: float | None = Field(default=None, ge=-1.0, le=1.0)
+
     # --- Ollama ------------------------------------------------------------------------
     # Docker Compose sets http://ollama:11434; the default suits `uv run` with a host Ollama.
     ollama_base_url: AnyHttpUrl = AnyHttpUrl("http://localhost:11434")
