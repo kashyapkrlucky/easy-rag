@@ -19,6 +19,7 @@ from easyrag.ingestion.coordinator import IndexingCoordinator
 from easyrag.ingestion.indexer import Indexer
 from easyrag.ingestion.loader import FilesystemMarkdownLoader
 from easyrag.ingestion.markdown import MarkdownParser
+from easyrag.ingestion.watcher import DocsWatcher
 from easyrag.llm.base import GenerationOptions, LLMProvider
 from easyrag.llm.ollama import OllamaLLMProvider
 from easyrag.rag.prompt import PromptBuilder
@@ -43,6 +44,7 @@ class AppContainer:
     llm: LLMProvider
     indexer: Indexer
     indexing: IndexingCoordinator
+    watcher: DocsWatcher
     index_store: PostgresIndexStore
     retriever: Retriever
     rag: RagService
@@ -50,7 +52,9 @@ class AppContainer:
     readiness_checks: Mapping[str, ReadinessCheck]
 
     async def aclose(self) -> None:
-        await self.indexing.aclose()  # stop background indexing before closing its clients
+        # Stop event sources first, then indexing, then the clients indexing uses.
+        await self.watcher.aclose()
+        await self.indexing.aclose()
         await self.http_client.aclose()
         await self.engine.dispose()
 
@@ -116,6 +120,8 @@ def build_container(settings: Settings) -> AppContainer:
         ungrounded_policy=settings.rag_ungrounded_policy,
     )
 
+    indexing = IndexingCoordinator(indexer)
+
     async def database() -> CheckStatus:
         await ping(engine, settings.health_check_timeout_seconds)
         return "ok"
@@ -134,7 +140,14 @@ def build_container(settings: Settings) -> AppContainer:
         embeddings=embeddings,
         llm=llm,
         indexer=indexer,
-        indexing=IndexingCoordinator(indexer),
+        indexing=indexing,
+        watcher=DocsWatcher(
+            settings.docs_dir,
+            indexing.request_run,
+            debounce_ms=settings.watch_debounce_ms,
+            force_polling=settings.watch_force_polling,
+            resync_seconds=settings.watch_resync_seconds,
+        ),
         index_store=index_store,
         retriever=retriever,
         rag=rag,

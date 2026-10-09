@@ -47,6 +47,15 @@ class Settings(BaseSettings):
     # Index the docs directory in the background when the API starts (retrying until
     # Ollama and the database are ready).
     index_on_startup: bool = True
+    # Re-index automatically when Markdown files change (ARCHITECTURE D20).
+    watch_enabled: bool = True
+    # Poll instead of relying on native events (bind mounts / network filesystems that
+    # do not deliver them).
+    watch_force_polling: bool = False
+    # Changes within this window are grouped into one re-index request.
+    watch_debounce_ms: int = Field(default=1000, ge=50, le=60000)
+    # Safety-net re-index request even without events; 0 disables it.
+    watch_resync_seconds: float = Field(default=300.0, ge=0, le=86400)
 
     # --- Retrieval ---------------------------------------------------------------------
     retrieval_top_k: int = Field(default=5, ge=1, le=50)

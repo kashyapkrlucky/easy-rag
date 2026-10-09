@@ -17,7 +17,8 @@ router = APIRouter(prefix="/api/v1", tags=["index"])
 async def index_status(container: ContainerDep) -> IndexStatusResponse:
     """The current or last indexing run, and the size of the index."""
     documents, chunks = await container.index_store.counts()
-    return IndexStatusResponse.from_domain(container.indexing.status(), documents, chunks)
+    watcher = container.watcher.state if container.settings.watch_enabled else "disabled"
+    return IndexStatusResponse.from_domain(container.indexing.status(), documents, chunks, watcher)
 
 
 @router.post(

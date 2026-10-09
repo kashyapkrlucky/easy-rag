@@ -4,7 +4,7 @@ A self-hosted, local-first Retrieval-Augmented Generation system for your Markdo
 documents. It runs entirely on your machine — Python, FastAPI, PostgreSQL + pgvector and
 Ollama — with no external SaaS.
 
-> **Status: Phase 15 — automatic, incremental indexing.** Documents are indexed when the app starts, and only changed files are re-processed. Ask questions with `POST /api/v1/chat` and get answers with their sources.
+> **Status: Phase 16 — live re-indexing.** Add, edit or delete Markdown files and the index follows within seconds. Ask questions with `POST /api/v1/chat` and get answers with their sources.
 > See [ROADMAP.md](ROADMAP.md) for progress.
 
 ## What it will do
@@ -82,7 +82,14 @@ Indexing is incremental:
 - If the docs folder is ever *empty* (for example a wrong mount), the index is **not**
   wiped. The status report flags it instead.
 
-After editing documents, re-index without restarting:
+**Changes are picked up automatically.** The app watches the docs folder, and adding,
+editing or deleting a Markdown file triggers re-indexing within a second or two. Bursts of
+changes (a `git pull`, a bulk copy) are grouped into one run. As a safety net, a full
+incremental check also runs every 5 minutes (`EASYRAG_WATCH_RESYNC_SECONDS`). If your
+docs live on a filesystem that doesn't deliver change events (some network shares), set
+`EASYRAG_WATCH_FORCE_POLLING=true`.
+
+You can also re-index on demand:
 
 ```bash
 curl -X POST localhost:8000/api/v1/index            # 202 started (409 if already running)

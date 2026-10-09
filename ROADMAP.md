@@ -162,6 +162,8 @@ Decision references (D1–D24) point to [ARCHITECTURE.md §9](ARCHITECTURE.md#9-
 - **Objective:** a `watchfiles` watcher with debounce, a polling fallback and periodic re-sync, all feeding the same indexer. (D20)
 - **Files:** `ingestion/watcher.py`, lifespan wiring, config
 - **Tests:** create/modify/delete triggers a sync (temporary directory); debounce coalesces bursts; clean shutdown.
+- **Done:** `ingestion/watcher.py`, coalescing `IndexingCoordinator.request_run()` with `pending` status, watcher state in `/index/status`, `watchfiles` declared as a runtime dependency, settings. Tests: watcher against real temporary directories in **both native-event and polling modes** (create/modify/delete, burst debounce, filtered files, catch-up request, periodic resync, late-appearing directory, prompt clean shutdown; run 6× to check for flakiness); coordinator coalescing (10 requests → 1 follow-up, follow-up after startup retries, no loop on failure). Live: host edits re-indexed in about 1 s through the macOS bind mount; 12-file burst → 1 run.
+- **Status:** ✅ done
 - **Commit:** `feat: add filesystem change detection`
 
 ### Phase 17 — Hybrid retrieval

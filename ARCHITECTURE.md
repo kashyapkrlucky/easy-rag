@@ -163,7 +163,7 @@ easy-rag/
 │   │   ├── chunker.py                (P6)
 │   │   ├── indexer.py                (P9, incremental in P15)
 │   │   ├── coordinator.py            (P15) background runs, startup retries, status
-│   │   └── watcher.py                (P16)
+│   │   └── watcher.py                (P16) watchfiles events → coalesced run requests
 │   ├── embeddings/
 │   │   ├── base.py                   (P7)  EmbeddingProvider Protocol
 │   │   ├── fake.py                   (P7)  deterministic test provider
@@ -705,6 +705,27 @@ host-Ollama setup first-class.
 debouncing. Bind-mounted volumes on Docker Desktop don't always deliver native file
 events reliably, so polling can be forced via config. A periodic full re-sync is the
 safety net, and because indexing is idempotent (D10), it's cheap.
+*Implemented in Phase 16* (`ingestion/watcher.py`):
+- **The watcher only requests runs.** It calls `IndexingCoordinator.request_run()`, which
+  **coalesces**: if a run is in progress, exactly one follow-up runs after it, however many
+  requests arrive. A 12-file burst (like a `git pull`) produced **one** index run live.
+  Changes made *during* a run are never lost.
+- **Event filter:** only `*.md`/`*.markdown`, never hidden paths (the same rules as the
+  loader).
+- **Debounce:** events are grouped for `EASYRAG_WATCH_DEBOUNCE_MS` (default 1000).
+- **Catch-up request whenever watching (re)starts.** A flaky test exposed a real race: the
+  polling backend can take its initial snapshot *after* a change, which then never gets
+  reported. Requesting one run on (re)start closes the gap cheaply, because runs are
+  incremental.
+- **Periodic resync** (`EASYRAG_WATCH_RESYNC_SECONDS`, default 300, `0` = off) is the safety
+  net for missed events.
+- **A missing docs directory is waited for** (status `waiting_for_directory`), not fatal.
+- **Measured on macOS Docker Desktop:** native events *do* cross the bind mount. A host
+  edit was re-indexed in about 1 s with no trigger. `EASYRAG_WATCH_FORCE_POLLING=true`
+  remains for filesystems that don't deliver events.
+- macOS FSEvents can report *historical* events (writes from just before watching
+  started). That's harmless (one cheap extra run), and the tests account for it.
+- **Shutdown order:** watcher, then coordinator, then clients.
 
 **D21 — Error model.** Adapters raise domain exceptions (`EmbeddingProviderUnavailableError`,
 `LLMProviderUnavailable`, `DocumentParseError`, ...). The API maps them to HTTP status codes
@@ -898,7 +919,7 @@ numbers must match.
 | `POST /api/v1/retrieve` | 10 | Retrieval only (debugging, evaluation) |
 | `POST /api/v1/chat` | 13–14 ✅ | Question → `{answer, status, grounded, truncated, sources}`; `[k]` in the answer ⇔ `sources[k-1]` |
 | `GET /api/v1/documents` | 15 ✅ | Indexed documents: path, title, hash, size, chunk count, indexed_at |
-| `GET /api/v1/index/status` | 15 ✅ | State, last report, last error, startup attempts, document/chunk counts |
+| `GET /api/v1/index/status` | 15–16 ✅ | State, pending follow-up, watcher state, last report, last error, startup attempts, counts |
 | `POST /api/v1/index` | 15 ✅ | Start an incremental run: 202, or 409 `index_running` |
 | `GET /metrics` | 20 | Prometheus metrics |
 
@@ -949,6 +970,7 @@ Chat contract (target):
 | `EASYRAG_RAG_UNGROUNDED_POLICY` | `refuse` (`flag` returns uncited, unsupported answers marked `grounded: false`) | 14 |
 | `EASYRAG_INDEX_ON_STARTUP` | `true` | 15 |
 | `EASYRAG_WATCH_ENABLED` / `_FORCE_POLLING` | `true` / `false` | 16 |
+| `EASYRAG_WATCH_DEBOUNCE_MS` / `_RESYNC_SECONDS` | `1000` / `300` (`0` = no resync) | 16 |
 | `EASYRAG_API_KEY` | unset (auth off) | 22 |
 
 The exact model defaults are chosen and justified in Phases 8 and 12.

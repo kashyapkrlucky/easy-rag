@@ -3,7 +3,10 @@
 - ``start_until_success()``: used at startup. Retries with exponential backoff while
   dependencies are not ready yet (Ollama still pulling models, database starting, docs
   directory not mounted), and gives up only on an incompatible index, which needs a human.
-- ``trigger()``: one run on request; refuses while a run is in progress.
+- ``trigger()``: one run on request; refuses while a run is in progress (HTTP 409).
+- ``request_run()``: coalescing run request (file watcher, periodic resync). If a run is
+  in progress, exactly one follow-up run is scheduled after it, however many requests
+  arrive meanwhile, so changes made during a run are never lost.
 - ``status()``: a snapshot for the API.
 
 Only one run executes at a time in this process; across processes the store's writer
@@ -44,6 +47,8 @@ class IndexStatus:
     last_error: str | None
     # Startup only: consecutive failed attempts while waiting for dependencies.
     attempts: int
+    # A follow-up run has been requested while a run was in progress.
+    pending: bool
 
 
 class IndexingCoordinator:
@@ -66,6 +71,7 @@ class IndexingCoordinator:
         self._last_report: IndexReport | None = None
         self._last_error: str | None = None
         self._attempts = 0
+        self._pending = False
 
     @property
     def running(self) -> bool:
@@ -79,6 +85,7 @@ class IndexingCoordinator:
             last_report=self._last_report,
             last_error=self._last_error,
             attempts=self._attempts,
+            pending=self._pending,
         )
 
     def start_until_success(self) -> None:
@@ -87,6 +94,13 @@ class IndexingCoordinator:
 
     def trigger(self) -> None:
         """Start one background run. Raises ``IndexRunInProgressError`` if one is running."""
+        self._start(self._once())
+
+    def request_run(self) -> None:
+        """Run now, or once more after the current run (coalescing; never raises)."""
+        if self.running:
+            self._pending = True
+            return
         self._start(self._once())
 
     async def wait(self) -> None:
@@ -109,6 +123,13 @@ class IndexingCoordinator:
     async def _once(self) -> None:
         with contextlib.suppress(Exception):  # recorded in the status by _run
             await self._run()
+        await self._drain_pending()
+
+    async def _drain_pending(self) -> None:
+        while self._pending:
+            self._pending = False
+            with contextlib.suppress(Exception):
+                await self._run()
 
     async def _until_success(self) -> None:
         delay = self._initial_retry_seconds
@@ -116,10 +137,10 @@ class IndexingCoordinator:
         while True:
             try:
                 await self._run()
-                return
+                break
             except IndexIncompatibleError:
                 logger.error("Startup indexing stopped: the index must be rebuilt")
-                return
+                break
             except Exception:
                 self._attempts += 1
                 logger.warning(
@@ -129,6 +150,7 @@ class IndexingCoordinator:
                 )
                 await self._sleep(delay)
                 delay = min(delay * 2, self._max_retry_seconds)
+        await self._drain_pending()
 
     async def _run(self) -> None:
         self._state = "running"

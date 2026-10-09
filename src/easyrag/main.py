@@ -37,6 +37,8 @@ def create_app(
         app.state.container = container
         if resolved.index_on_startup:
             container.indexing.start_until_success()
+        if resolved.watch_enabled:
+            container.watcher.start()
         try:
             yield
         finally:

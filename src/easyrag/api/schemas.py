@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field, StringConstraints
 from easyrag.domain.answers import Answer
 from easyrag.domain.chunks import RetrievedChunk
 from easyrag.ingestion.coordinator import IndexStatus
+from easyrag.ingestion.watcher import WatcherState
 from easyrag.retrieval.vector import MAX_TOP_K
 from easyrag.storage.index_store import IndexedDocument
 
@@ -123,12 +124,16 @@ class IndexStatusResponse(BaseModel):
     finished_at: datetime | None
     last_error: str | None
     attempts: int = Field(description="Consecutive failed startup attempts while waiting")
+    pending: bool = Field(description="Another run will follow the current one")
+    watcher: Literal["disabled", "starting", "watching", "waiting_for_directory", "stopped"]
     last_report: IndexReportResponse | None
     documents: int = Field(description="Documents currently in the index")
     chunks: int = Field(description="Chunks currently in the index")
 
     @classmethod
-    def from_domain(cls, status: IndexStatus, documents: int, chunks: int) -> "IndexStatusResponse":
+    def from_domain(
+        cls, status: IndexStatus, documents: int, chunks: int, watcher: WatcherState
+    ) -> "IndexStatusResponse":
         report = status.last_report
         return cls(
             state=status.state,
@@ -136,6 +141,8 @@ class IndexStatusResponse(BaseModel):
             finished_at=status.finished_at,
             last_error=status.last_error,
             attempts=status.attempts,
+            pending=status.pending,
+            watcher=watcher,
             documents=documents,
             chunks=chunks,
             last_report=None

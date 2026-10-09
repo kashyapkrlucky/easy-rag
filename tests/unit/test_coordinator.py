@@ -132,3 +132,79 @@ async def test_close_cancels_a_running_task() -> None:
 
     assert not subject.running
     assert subject.status().last_error == "cancelled"
+
+
+# -- coalescing requests (Phase 16) ----------------------------------------------------
+
+
+async def test_request_run_starts_a_run_when_idle() -> None:
+    indexer = ScriptedIndexer()
+    subject = coordinator(indexer)
+
+    subject.request_run()
+    await subject.wait()
+
+    assert indexer.calls == 1
+    assert subject.status().pending is False
+
+
+async def test_requests_during_a_run_coalesce_into_exactly_one_follow_up() -> None:
+    gate = asyncio.Event()
+    indexer = ScriptedIndexer(gate=gate)
+    subject = coordinator(indexer)
+
+    subject.request_run()
+    await asyncio.sleep(0)
+    for _ in range(10):  # a burst of file events while the first run is in progress
+        subject.request_run()
+    assert subject.status().pending is True
+
+    gate.set()
+    await subject.wait()
+
+    assert indexer.calls == 2  # the running one + one follow-up, not 11
+    assert subject.status().pending is False
+
+
+async def test_request_run_never_raises_while_running() -> None:
+    gate = asyncio.Event()
+    subject = coordinator(ScriptedIndexer(gate=gate))
+    subject.trigger()
+    await asyncio.sleep(0)
+
+    subject.request_run()  # unlike trigger(), no IndexRunInProgressError
+
+    gate.set()
+    await subject.wait()
+
+
+async def test_requests_during_startup_retries_run_after_success() -> None:
+    sleep = RecordingSleep()
+    indexer = ScriptedIndexer(EmbeddingProviderUnavailableError("down"))
+    subject = coordinator(indexer, sleep)
+
+    subject.start_until_success()
+    subject.request_run()  # a file changed while startup indexing was retrying
+    await subject.wait()
+
+    assert indexer.calls == 3  # failed attempt, successful retry, follow-up for the change
+
+
+async def test_a_failed_follow_up_is_recorded_and_does_not_loop() -> None:
+    gate = asyncio.Event()
+    indexer = ScriptedIndexer(gate=gate)
+    subject = coordinator(indexer)
+    subject.request_run()
+    await asyncio.sleep(0)
+    subject.request_run()
+    indexer.failures = [
+        EmbeddingProviderUnavailableError("down"),
+        EmbeddingProviderUnavailableError("down"),
+    ]
+    indexer.gate = None
+    gate.set()
+
+    await subject.wait()
+
+    assert indexer.calls == 2
+    assert subject.status().state == "failed"

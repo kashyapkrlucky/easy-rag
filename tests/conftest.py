@@ -22,8 +22,9 @@ def make_settings(monkeypatch: pytest.MonkeyPatch) -> SettingsFactory:
         values: dict[str, Any] = {
             "database_url": UNREACHABLE_DATABASE_URL,
             "ollama_base_url": UNREACHABLE_OLLAMA_URL,
-            # No background indexing unless a test asks for it.
+            # No background indexing or file watching unless a test asks for it.
             "index_on_startup": False,
+            "watch_enabled": False,
             **overrides,
         }
         return Settings(_env_file=None, **values)
