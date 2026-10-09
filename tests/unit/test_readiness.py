@@ -107,6 +107,7 @@ def test_default_container_registers_all_dependencies(make_settings: SettingsFac
         "database",
         "schema",
         "embedding_model",
+        "index",
     ]
 
 
@@ -119,4 +120,5 @@ def test_unreachable_dependencies_are_reported(make_settings: SettingsFactory) -
         "database": "unavailable",
         "schema": "unavailable",
         "embedding_model": "unavailable",
+        "index": "unavailable",
     }

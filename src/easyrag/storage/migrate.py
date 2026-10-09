@@ -8,20 +8,39 @@ Run before the server starts (see docker/entrypoint.sh):
 import logging
 from enum import StrEnum
 from functools import cache
+from typing import Any
 
 from alembic import command
 from alembic.config import Config
 from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import Connection
+from sqlalchemy.dialects.postgresql.base import ischema_names
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from easyrag.config import Settings
 from easyrag.observability.logging import configure_logging
+from easyrag.storage.models import APP_MANAGED_INDEX_PREFIX
 
 logger = logging.getLogger("easyrag.storage.migrate")  # stable name under `python -m`
 
 SCRIPT_LOCATION = "easyrag.storage:migrations"
+
+# Let schema reflection recognise pgvector's ``vector`` type, so autogenerate comparisons
+# (migrations and the models-match-migrations test) see it instead of NullType.
+ischema_names["vector"] = Vector
+
+
+def include_object(
+    obj: Any, name: str | None, type_: str, reflected: bool, compare_to: Any
+) -> bool:
+    """Schema-comparison filter: skip indexes managed by the application.
+
+    The dimension-specific HNSW indexes are created by PostgresIndexStore, not by
+    migrations (ARCHITECTURE D11), so autogenerate must neither create nor drop them.
+    """
+    return not (type_ == "index" and bool(name) and str(name).startswith(APP_MANAGED_INDEX_PREFIX))
 
 
 class SchemaStatus(StrEnum):

@@ -5,9 +5,10 @@ for local development, from a ``.env`` file). This is the only module that reads
 the environment; everything else receives a ``Settings`` instance.
 """
 
+from pathlib import Path
 from typing import Annotated, Literal
 
-from pydantic import AnyHttpUrl, BeforeValidator, Field, SecretStr
+from pydantic import AnyHttpUrl, BeforeValidator, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
@@ -37,6 +38,13 @@ class Settings(BaseSettings):
     # Upper bound for each dependency check performed by /health/ready.
     health_check_timeout_seconds: float = Field(default=2.0, gt=0, le=30)
 
+    # --- Documents and chunking ------------------------------------------------------
+    # Directory of Markdown files to index. Docker Compose mounts it at /data/docs.
+    docs_dir: Path = Path("docs")
+    # Chunk budget in estimated tokens, including the contextual header (ARCHITECTURE D7).
+    chunk_max_tokens: int = Field(default=400, ge=32, le=8192)
+    chunk_overlap_tokens: int = Field(default=50, ge=0)
+
     # --- Ollama ------------------------------------------------------------------------
     # Docker Compose sets http://ollama:11434; the default suits `uv run` with a host Ollama.
     ollama_base_url: AnyHttpUrl = AnyHttpUrl("http://localhost:11434")
@@ -53,3 +61,9 @@ class Settings(BaseSettings):
     # expects these). Change them together with the model.
     embedding_query_prefix: str = "search_query: "
     embedding_document_prefix: str = "search_document: "
+
+    @model_validator(mode="after")
+    def _overlap_fits_chunk(self) -> "Settings":
+        if self.chunk_overlap_tokens > self.chunk_max_tokens // 2:
+            raise ValueError("chunk_overlap_tokens must be at most half of chunk_max_tokens")
+        return self

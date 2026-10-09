@@ -4,7 +4,7 @@ A self-hosted, local-first Retrieval-Augmented Generation system for your Markdo
 documents. It runs entirely on your machine — Python, FastAPI, PostgreSQL + pgvector and
 Ollama — with no external SaaS.
 
-> **Status: Phase 8 — Ollama embeddings.** The stack runs PostgreSQL + pgvector and Ollama with an embedding model; documents can be loaded, parsed, chunked and embedded (library only, no indexing or API yet).
+> **Status: Phase 9 — indexing into pgvector.** `easyrag index` loads, chunks, embeds and stores your documents. Search and chat are not available yet.
 > See [ROADMAP.md](ROADMAP.md) for progress.
 
 ## What it will do
@@ -50,7 +50,7 @@ answer, EasyRAG says it doesn't know instead of guessing.
 cp .env.example .env                                # then set POSTGRES_PASSWORD in .env
 docker compose up --build -d
 curl http://localhost:8000/health/live              # {"status":"ok"}
-curl http://localhost:8000/health/ready             # {"status":"ready","checks":{"database":"ok","schema":"ok","embedding_model":"ok"}}
+curl http://localhost:8000/health/ready             # {"status":"ready","checks":{...all "ok"}}
 docker compose down                                 # add -v to also delete the database volume
 ```
 
@@ -62,6 +62,26 @@ On first start, `ollama-pull` downloads the embedding model (`nomic-embed-text:v
 is ~4 GB). If you have [Ollama](https://ollama.com) installed natively, it's much faster:
 run `ollama pull nomic-embed-text:v1.5` and set
 `EASYRAG_OLLAMA_BASE_URL=http://host.docker.internal:11434` in `.env`.
+
+### Indexing your documents
+
+Put Markdown files in `./docs` (or point `EASYRAG_DOCS_HOST_DIR` in `.env` at another
+folder), then run:
+
+```bash
+docker compose run --rm app easyrag index
+```
+
+Re-running is safe: every document is replaced atomically. If you change the embedding
+model or its prefixes, the existing index is refused (vectors from different models can't
+be mixed). Rebuild it with:
+
+```bash
+docker compose run --rm app easyrag index --rebuild
+```
+
+Exit codes: `0` success, `1` some documents failed, `2` configuration problem,
+`3` embedding model unavailable. Automatic and incremental indexing arrive in a later phase.
 
 The API is published on `127.0.0.1` only. Set `EASYRAG_PORT` in `.env` to change the host port.
 PostgreSQL is not published to the host.

@@ -6,6 +6,7 @@ prefixes and model metadata. The rest of the application sees only
 """
 
 import asyncio
+import hashlib
 import logging
 from collections.abc import Sequence
 from typing import Any
@@ -53,7 +54,15 @@ class OllamaEmbeddingProvider:
 
     @property
     def model_id(self) -> str:
-        return f"ollama/{self._model}"
+        """``ollama/<model>``, plus a short hash of the prefixes when any are set.
+
+        Prefixes change every vector, so vectors produced with different prefixes belong
+        to different vector spaces and must not share an index.
+        """
+        if not (self._query_prefix or self._document_prefix):
+            return f"ollama/{self._model}"
+        prefixes = f"{self._query_prefix}\x1f{self._document_prefix}".encode()
+        return f"ollama/{self._model}+p:{hashlib.sha256(prefixes).hexdigest()[:8]}"
 
     @property
     def dimension(self) -> int:

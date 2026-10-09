@@ -23,6 +23,10 @@ from easyrag.domain.documents import ParsedDocument, Section, SourceDocument
 
 logger = logging.getLogger(__name__)
 
+# Bump whenever parsing output can change for the same input (sections, titles, anchors…):
+# it is part of the pipeline fingerprint, so a bump triggers re-indexing.
+PARSER_VERSION = "1"
+
 
 @dataclass(frozen=True, slots=True)
 class _Heading:

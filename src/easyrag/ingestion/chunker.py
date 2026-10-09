@@ -27,6 +27,10 @@ from easyrag.tokens import estimate_tokens
 
 _ID_SEPARATOR = "\x1f"
 
+# Bump whenever chunking output can change for the same input and configuration:
+# it is part of the pipeline fingerprint, so a bump triggers re-indexing.
+CHUNKER_VERSION = "1"
+
 
 @dataclass(frozen=True, slots=True)
 class ChunkingConfig:

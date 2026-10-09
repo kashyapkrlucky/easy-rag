@@ -3,14 +3,17 @@
 Migrations under ``storage/migrations`` must produce exactly this schema; an
 integration test fails if autogenerate detects any difference.
 
-The ``embedding`` column on ``chunks`` is added in Phase 9 together with the
-embedding model choice; the full-text column in Phase 17.
+The ``embedding`` column is dimension-agnostic (plain ``vector``): the dimension is
+runtime configuration, enforced by ``index_state`` and by the dimension-specific HNSW
+expression index that ``PostgresIndexStore`` manages (ARCHITECTURE D11). The full-text
+column arrives in Phase 17.
 """
 
 import uuid
 from datetime import datetime
 from typing import Any
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     ARRAY,
     CheckConstraint,
@@ -26,6 +29,10 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
+# Created and dropped by PostgresIndexStore, not by migrations: their definition depends on
+# the configured embedding dimension. Migrations and schema comparisons ignore them.
+APP_MANAGED_INDEX_PREFIX = "ix_chunks_embedding_hnsw_"
 
 # Deterministic constraint names, so later migrations can reference them reliably.
 NAMING_CONVENTION = {
@@ -95,6 +102,9 @@ class Chunk(Base):
     start_line: Mapped[int] = mapped_column(Integer)
     end_line: Mapped[int] = mapped_column(Integer)
     token_estimate: Mapped[int] = mapped_column(Integer)
+    embedding: Mapped[list[float]] = mapped_column(Vector())
+    # EmbeddingProvider.model_id that produced ``embedding``.
+    embedding_model: Mapped[str] = mapped_column(Text)
 
     document: Mapped[Document] = relationship(back_populates="chunks")
 

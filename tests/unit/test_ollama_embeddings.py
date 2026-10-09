@@ -123,8 +123,14 @@ async def test_empty_input_makes_no_request() -> None:
     assert backend.requests == []
 
 
-def test_model_id_identifies_the_backend() -> None:
-    assert make_provider(FakeOllama()).model_id == "ollama/nomic-embed-text:v1.5"
+def test_model_id_identifies_backend_model_and_prefixes() -> None:
+    with_prefixes = make_provider(FakeOllama()).model_id
+    other_prefixes = make_provider(FakeOllama(), query_prefix="query: ").model_id
+    no_prefixes = make_provider(FakeOllama(), query_prefix="", document_prefix="").model_id
+
+    assert with_prefixes.startswith("ollama/nomic-embed-text:v1.5+p:")
+    assert with_prefixes != other_prefixes  # different prefixes, different vector space
+    assert no_prefixes == "ollama/nomic-embed-text:v1.5"
 
 
 # -- response validation ---------------------------------------------------------------

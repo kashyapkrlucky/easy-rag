@@ -14,7 +14,12 @@ from easyrag.config import Settings
 from easyrag.embeddings.base import EmbeddingProvider
 from easyrag.embeddings.ollama import OllamaEmbeddingProvider
 from easyrag.health import CheckStatus, ReadinessCheck
+from easyrag.ingestion.chunker import Chunker, ChunkingConfig
+from easyrag.ingestion.indexer import Indexer
+from easyrag.ingestion.loader import FilesystemMarkdownLoader
+from easyrag.ingestion.markdown import MarkdownParser
 from easyrag.storage.database import create_engine, ping
+from easyrag.storage.index_store import PostgresIndexStore
 from easyrag.storage.migrate import SchemaStatus, schema_status
 
 # Connecting should be fast even when a request (model load + inference) is slow.
@@ -27,6 +32,7 @@ class AppContainer:
     engine: AsyncEngine
     http_client: httpx2.AsyncClient
     embeddings: EmbeddingProvider
+    indexer: Indexer
     # Reported by /health/ready, in this order.
     readiness_checks: Mapping[str, ReadinessCheck]
 
@@ -55,6 +61,20 @@ def build_container(settings: Settings) -> AppContainer:
         document_prefix=settings.embedding_document_prefix,
     )
 
+    index_store = PostgresIndexStore(engine)
+    indexer = Indexer(
+        loader_factory=lambda: FilesystemMarkdownLoader(settings.docs_dir),
+        parser=MarkdownParser(),
+        chunker=Chunker(
+            ChunkingConfig(
+                max_tokens=settings.chunk_max_tokens,
+                overlap_tokens=settings.chunk_overlap_tokens,
+            )
+        ),
+        embeddings=embeddings,
+        store=index_store,
+    )
+
     async def database() -> CheckStatus:
         await ping(engine, settings.health_check_timeout_seconds)
         return "ok"
@@ -63,14 +83,19 @@ def build_container(settings: Settings) -> AppContainer:
         status = await schema_status(engine)
         return "ok" if status is SchemaStatus.CURRENT else "outdated"
 
+    async def index() -> CheckStatus:
+        return await index_store.compatibility(embeddings.model_id, embeddings.dimension)
+
     return AppContainer(
         settings=settings,
         engine=engine,
         http_client=http_client,
         embeddings=embeddings,
+        indexer=indexer,
         readiness_checks={
             "database": database,
             "schema": schema,
             "embedding_model": embeddings.readiness,
+            "index": index,
         },
     )

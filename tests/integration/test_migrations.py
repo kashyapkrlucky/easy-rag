@@ -12,7 +12,12 @@ from sqlalchemy import Connection, create_engine, inspect, text
 from sqlalchemy.exc import IntegrityError
 
 from easyrag.main import create_app
-from easyrag.storage.migrate import alembic_config, expected_heads, upgrade_to_head
+from easyrag.storage.migrate import (
+    alembic_config,
+    expected_heads,
+    include_object,
+    upgrade_to_head,
+)
 from easyrag.storage.models import Base
 from tests.support import SettingsFactory
 
@@ -37,7 +42,7 @@ def test_upgrade_creates_schema_and_extension(migrated_database_url: str) -> Non
         heads = set(MigrationContext.configure(connection).get_current_heads())
     engine.dispose()
 
-    assert heads == expected_heads() == {"0001"}
+    assert heads == expected_heads() == {"0002"}
 
 
 def test_downgrade_and_upgrade_round_trip(migrated_database_url: str) -> None:
@@ -76,7 +81,9 @@ def test_concurrent_migration_processes_are_serialised(database_url: str) -> Non
 def test_models_match_migrations(migrated_database_url: str) -> None:
     engine = create_engine(migrated_database_url)
     with engine.connect() as connection:
-        context = MigrationContext.configure(connection, opts={"compare_type": True})
+        context = MigrationContext.configure(
+            connection, opts={"compare_type": True, "include_object": include_object}
+        )
         diff = compare_metadata(context, Base.metadata)
     engine.dispose()
 
@@ -91,8 +98,9 @@ def test_constraints_and_cascade(migrated_database_url: str) -> None:
     )
     insert_chunk = text(
         "INSERT INTO chunks (id, document_id, ordinal, heading_path, section_anchor, content,"
-        " content_hash, start_line, end_line, token_estimate)"
-        " VALUES (:id, :doc, 0, ARRAY['Intro'], 'intro', 'text', :hash, 1, 3, 2)"
+        " content_hash, start_line, end_line, token_estimate, embedding, embedding_model)"
+        " VALUES (:id, :doc, 0, ARRAY['Intro'], 'intro', 'text', :hash, 1, 3, 2,"
+        " '[0.6,0.8]', 'fake/test')"
     )
 
     with engine.begin() as connection:
@@ -126,10 +134,8 @@ def test_readiness_requires_current_schema(
 
     # Ollama is not part of integration tests, so only the database checks are asserted.
     assert before.status_code == 503
-    assert before.json()["checks"] | {"embedding_model": None} == {
-        "database": "ok",
-        "schema": "outdated",
-        "embedding_model": None,
-    }
-    assert after.json()["checks"]["database"] == "ok"
-    assert after.json()["checks"]["schema"] == "ok"
+    assert (before.json()["checks"]["database"], before.json()["checks"]["schema"]) == (
+        "ok",
+        "outdated",
+    )
+    assert (after.json()["checks"]["database"], after.json()["checks"]["schema"]) == ("ok", "ok")

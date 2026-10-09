@@ -102,9 +102,11 @@ Decision references (D1–D24) point to [ARCHITECTURE.md §9](ARCHITECTURE.md#9-
 - **Commit:** `feat: add Ollama embedding provider`
 
 ### Phase 9 — Store chunks and embeddings in pgvector
-- **Objective:** a migration adding the `embedding` + `embedding_model` columns and the HNSW index; `VectorStore` + `PgVectorStore`; `DocumentRepository`; a basic full (non-incremental) indexer; `easyrag index` CLI; `EASYRAG_DOCS_DIR` + read-only `./docs` mount in compose; startup model/dimension guard. (D10 atomicity, D11)
-- **Files:** `storage/migrations/versions/0002_…`, `storage/{repositories,vector_store}.py`, `ingestion/indexer.py`, `cli.py`
-- **Tests:** integration: indexing a fixture corpus stores the expected rows; re-running yields the same rows; dimension mismatch refuses to start.
+- **Objective:** a migration adding the `embedding` + `embedding_model` columns; the dimension-specific HNSW index; an `IndexStore` port + `PostgresIndexStore`; a basic full (non-incremental) indexer; `easyrag index [--rebuild]` CLI; `EASYRAG_DOCS_DIR` + read-only `./docs` mount in compose; model/dimension guard. (D10 atomicity, D11)
+- **Files:** `storage/migrations/versions/0002_chunk_embeddings.py`, `storage/index_store.py`, `ingestion/indexer.py`, `cli.py`; `PARSER_VERSION` / `CHUNKER_VERSION`; prefix-aware `model_id`.
+- **Tests:** unit, with an in-memory store and the fake embedder: what is stored, idempotency, incompatible-index refusal, rebuild, document-level failure vs. provider outage, skipped files, fingerprint sensitivity. Integration, with real Postgres: rows and vectors (float32 tolerance), identical re-runs, replacement without orphans, model/dimension guard and readiness, rebuild switching the vector index, `EXPLAIN` showing the HNSW index in use.
+- **Not yet (Phase 15):** skipping unchanged documents, embedding reuse (and its `(content_hash, embedding_model)` index), deleting removed files, the advisory lock, indexing on startup.
+- **Status:** ✅ done
 - **Commit:** `feat: store document chunks and embeddings`
 
 ### Phase 10 — Vector similarity retrieval
@@ -139,7 +141,7 @@ Decision references (D1–D24) point to [ARCHITECTURE.md §9](ARCHITECTURE.md#9-
 - **Commit:** `feat: add grounded answers with source citations`
 
 ### Phase 15 — Automatic, incremental indexing
-- **Objective:** hash + fingerprint diffing, embedding reuse, deletion of removed documents, an advisory lock, indexing on startup as a background task, and the index status/documents/trigger endpoints. (D8–D10)
+- **Objective:** hash + fingerprint diffing, embedding reuse (plus the `(content_hash, embedding_model)` index), deletion of removed documents (never of files the loader merely *skipped*), an advisory lock, indexing on startup as a background task, and the index status/documents/trigger endpoints. (D8–D10)
 - **Files:** `ingestion/indexer.py`, `main.py` lifespan, `api/routes/index.py`
 - **Tests:** integration: an unchanged second run makes 0 embed calls; editing one section re-embeds only the changed chunks; delete/rename; a fingerprint change triggers a full re-index; concurrent runs serialise.
 - **Commit:** `feat: add incremental document indexing`

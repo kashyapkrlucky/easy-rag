@@ -8,6 +8,7 @@ from alembic import context
 from sqlalchemy import create_engine, pool, text
 
 from easyrag.config import Settings
+from easyrag.storage.migrate import include_object
 from easyrag.storage.models import Base
 
 # Arbitrary constant: serialises concurrent migration runs (e.g. two containers starting).
@@ -32,6 +33,7 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         compare_type=True,
+        include_object=include_object,
     )
     with context.begin_transaction():
         context.run_migrations()
@@ -47,6 +49,7 @@ def run_migrations_online() -> None:
                 connection=connection,
                 target_metadata=target_metadata,
                 compare_type=True,
+                include_object=include_object,
                 transaction_per_migration=True,
             )
             with context.begin_transaction():

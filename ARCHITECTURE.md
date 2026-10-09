@@ -37,19 +37,19 @@ put Markdown in ./docs  →  docker compose up  →  POST /api/v1/chat  →  gro
 
 ```
                 ┌───────────────────────────── docker compose ─────────────────────────────┐
-                │                                                                           │
-  ./docs  ──────┼──► (bind mount, read-only)                                                │
-  (*.md)        │          │                                                                │
-                │   ┌──────▼──────────────────────┐         ┌───────────────────────────┐   │
-  HTTP client ──┼──►│  easyrag (FastAPI + indexer)│────────►│ PostgreSQL 18 + pgvector  │   │
-  / Web UI      │   │  single Python process      │  SQL    │ documents, chunks,        │   │
-                │   └──────────────┬──────────────┘         │ embeddings, index state   │   │
-                │                  │ HTTP                    └───────────────────────────┘   │
-                │   ┌──────────────▼──────────────┐                                         │
-                │   │ Ollama                      │  ◄── or the host's Ollama               │
-                │   │ embedding model + chat model│      (recommended on macOS for GPU)     │
-                │   └─────────────────────────────┘                                         │
-                └───────────────────────────────────────────────────────────────────────────┘
+                │                                                                          │
+  ./docs  ──────┼──► (bind mount, read-only)                                               │
+  (*.md)        │          │                                                               │
+                │   ┌──────▼──────────────────────┐         ┌───────────────────────────┐  │
+  HTTP client ──┼──►│  easyrag (FastAPI + indexer)│────────►│ PostgreSQL 18 + pgvector  │  │
+  / Web UI      │   │  single Python process      │  SQL    │ documents, chunks,        │  │
+                │   └──────────────┬──────────────┘         │ embeddings, index state   │  │
+                │                  │ HTTP                   └───────────────────────────┘  │
+                │   ┌──────────────▼──────────────┐                                        │
+                │   │ Ollama                      │  ◄── or the host's Ollama              │
+                │   │ embedding model + chat model│      (recommended on macOS for GPU)    │
+                │   └─────────────────────────────┘                                        │
+                └──────────────────────────────────────────────────────────────────────────┘
 ```
 
 Three runtime containers: **app**, **postgres**, **ollama**. That is the whole
@@ -142,7 +142,7 @@ easy-rag/
 │   ├── config.py                     (P1)  Settings (pydantic-settings)
 │   ├── tokens.py                     (P6)  deterministic token estimate
 │   ├── container.py                  (P3)  composition root: builds adapters/services
-│   ├── cli.py                        (P9)  `easyrag index | eval | ...` (argparse)
+│   ├── cli.py                        (P9)  `easyrag index [--rebuild]`, later `eval` (argparse)
 │   ├── domain/
 │   │   ├── documents.py              (P5)  SourceDocument, ParsedDocument, Section
 │   │   ├── chunks.py                 (P6)  Chunk, RetrievedChunk
@@ -171,8 +171,8 @@ easy-rag/
 │   │   ├── models.py                 (P4)  ORM tables (source of truth for the schema)
 │   │   ├── migrate.py                (P4)  upgrade_to_head, schema_status
 │   │   ├── migrations/               (P4)  Alembic env + versions, shipped in the package
-│   │   ├── repositories.py           (P9)  DocumentRepository
-│   │   └── vector_store.py           (P9)  VectorStore Protocol + PgVectorStore
+│   │   ├── index_store.py            (P9)  PostgresIndexStore (write side, vector index, guard)
+│   │   └── vector_store.py           (P10) search (read side)
 │   ├── retrieval/
 │   │   ├── base.py                   (P10) Retriever Protocol
 │   │   ├── vector.py                 (P10)
@@ -317,9 +317,16 @@ parser (one implementation each — plain classes with config); the database its
 (SQLAlchemy already is the abstraction); settings. A Protocol is added only when a second
 implementation or a test fake genuinely needs it.
 
-Honest limitation: `VectorStore` and `DocumentRepository` share a Postgres transaction so a
-document's re-index is atomic. Swapping Postgres out would therefore mean re-implementing
-both; that is an accepted trade-off for transactional consistency.
+*Phase 9 refinement:* the write side is the `IndexStore` Protocol, **owned by the indexer**
+(`ingestion/indexer.py`: `prepare`, `save_document`, `reset`) and implemented by
+`PostgresIndexStore`. Unit tests drive the indexer with an in-memory store. There is no
+separate `DocumentRepository`: one document's row and chunks are written in one transaction
+by one class. The read side (`VectorStore.search`) arrives with retrieval (Phase 10)
+rather than as an interface nothing calls yet.
+
+Honest limitation: writes and reads share one Postgres schema, and a document's re-index
+is one transaction. Swapping Postgres out would therefore mean re-implementing both sides;
+that is an accepted trade-off for transactional consistency.
 
 ### Embedding provider contract (Phase 7)
 
@@ -375,12 +382,12 @@ chunks
   content_hash          CHAR(64) NOT NULL         -- indexed (P4)
   start_line, end_line  INTEGER NOT NULL
   token_estimate        INTEGER NOT NULL          -- estimate for embed_text (header + content)
-  embedding             VECTOR(d)                 -- (P9) d = configured dimension
-  embedding_model       TEXT                      -- (P9)
+  embedding             VECTOR NOT NULL           -- (P9) dimension-agnostic; see D11
+  embedding_model       TEXT NOT NULL             -- (P9) EmbeddingProvider.model_id
   search_vector         TSVECTOR GENERATED        -- (P17)
   UNIQUE (document_id, ordinal)
-  INDEX hnsw (embedding vector_cosine_ops)        -- (P9)
-  INDEX (content_hash, embedding_model)           -- (P9) embedding reuse lookup
+  INDEX hnsw ((embedding::vector(d)) vector_cosine_ops)  -- (P9) app-managed, see D11
+  INDEX (content_hash, embedding_model)           -- (P15) embedding reuse lookup
   INDEX gin (search_vector)                       -- (P17)
 
 index_state                                        -- key/value
@@ -511,6 +518,29 @@ mixing vector spaces. Cosine distance; `score = 1 − distance`.
 the `vector` type, and readiness compares it with the model's reported
 `embedding_length` (`embedding_model: misconfigured` on mismatch). So a wrong dimension
 is caught before any vector is stored.
+
+*Implemented in Phase 9, which revises the original plan:*
+- **The column is dimension-agnostic** (`embedding vector`). A `vector(d)` column would make
+  the ORM model, the migrations and the "models match migrations" test depend on an
+  environment variable. Alembic owns a static schema instead.
+- **The dimension is fixed by an app-managed expression index**,
+  `ix_chunks_embedding_hnsw_d<N>` on `((embedding::vector(N)) vector_cosine_ops)`. This is
+  pgvector's documented pattern. `PostgresIndexStore.prepare()` creates it, and
+  `--rebuild` drops it. Queries must use the same cast, `embedding::vector(N) <=> …`, to use
+  the index (verified with `EXPLAIN` in the integration tests). This is the one documented
+  exception to D17. Migrations and schema comparisons ignore indexes with that prefix
+  (`storage.migrate.include_object`).
+- **The guard is enforced at index time and reported by readiness**, rather than refusing
+  to start (D18). `index_state` records `embedding_model` and `embedding_dimension` on
+  first write. The indexer raises `IndexIncompatibleError` (CLI exit code 2, with
+  instructions to run `easyrag index --rebuild`), and readiness reports
+  `index: misconfigured`.
+- **`model_id` includes a hash of the embedding prefixes**
+  (`ollama/nomic-embed-text:v1.5+p:eb869adb`). Prefixes change every vector, so the same
+  model with different prefixes is a different vector space (verified: changing only the
+  query prefix is refused).
+- Observed on real data: top-3 cosine scores were tightly packed (0.742 / 0.738 / 0.709).
+  That supports keeping the similarity threshold off until Phase 19 calibrates it.
 
 **D12 — Two-layer grounding.**
 1. *Retrieval gate (deterministic):* if retrieval returns nothing above the similarity
@@ -677,7 +707,8 @@ Chat contract (target):
 |---|---|---|
 | `EASYRAG_LOG_LEVEL` | `INFO` | 1 |
 | `EASYRAG_DATABASE_URL` | — (required) | 3 |
-| `EASYRAG_DOCS_DIR` | `/data/docs` (container) | 9 |
+| `EASYRAG_DOCS_DIR` | `docs` (Compose: `/data/docs`) | 9 |
+| `EASYRAG_DOCS_HOST_DIR` (Compose only) | `./docs`, mounted read-only | 9 |
 | `EASYRAG_CHUNK_MAX_TOKENS` / `_OVERLAP_TOKENS` | `400` / `50` | 9 |
 | `EASYRAG_OLLAMA_BASE_URL` | `http://localhost:11434` (Compose: `http://ollama:11434`) | 8 |
 | `EASYRAG_OLLAMA_TIMEOUT_SECONDS` | `120` | 8 |
