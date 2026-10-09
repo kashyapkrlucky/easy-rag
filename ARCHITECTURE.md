@@ -131,10 +131,8 @@ easy-rag/
 ├── Dockerfile                        (P2)
 ├── .dockerignore                     (P2)
 ├── docker-compose.yml                (P2, extended P3/P8/P24)
-├── alembic.ini                       (P4)
-├── migrations/                       (P4)
-│   ├── env.py
-│   └── versions/
+├── alembic.ini                       (P4)  developer Alembic CLI only
+├── docker/entrypoint.sh              (P4)  migrate, then exec the server
 ├── docs/                             user corpus — git-ignored, mounted read-only
 ├── examples/docs/                    (P25) sample corpus for demos & tests
 ├── eval/datasets/                    (P19) question/answer/source datasets
@@ -169,7 +167,9 @@ easy-rag/
 │   │   └── ollama.py                 (P8)
 │   ├── storage/
 │   │   ├── database.py               (P3)  engine, session factory, ping
-│   │   ├── models.py                 (P4)  ORM tables
+│   │   ├── models.py                 (P4)  ORM tables (source of truth for the schema)
+│   │   ├── migrate.py                (P4)  upgrade_to_head, schema_status
+│   │   ├── migrations/               (P4)  Alembic env + versions, shipped in the package
 │   │   ├── repositories.py           (P9)  DocumentRepository
 │   │   └── vector_store.py           (P9)  VectorStore Protocol + PgVectorStore
 │   ├── retrieval/
@@ -322,8 +322,10 @@ both; that is an accepted trade-off for transactional consistency.
 
 ## 8. Data model
 
-Introduced in Phase 4; the `embedding` column and vector index arrive in Phase 9;
-the full-text column in Phase 17.
+Introduced in Phase 4 (migration `0001`); the `embedding` column and vector index arrive in
+Phase 9; the full-text column in Phase 17. Hashes are stored as `VARCHAR(64)` with CHECK
+constraints enforcing lowercase SHA-256 hex. Constraints follow a naming convention
+(`pk_`, `uq_`, `fk_`, `ck_`, `ix_` prefixes) so migrations can refer to them deterministically.
 
 ```
 documents
@@ -333,8 +335,8 @@ documents
   content_hash          CHAR(64) NOT NULL         -- sha256 of normalised text
   pipeline_fingerprint  CHAR(64) NOT NULL         -- hash of parser/chunker version+params+embedding model
   front_matter          JSONB NOT NULL DEFAULT '{}'
-  size_bytes            INTEGER
-  indexed_at            TIMESTAMPTZ NOT NULL
+  size_bytes            INTEGER NOT NULL
+  indexed_at            TIMESTAMPTZ NOT NULL DEFAULT now()
 
 chunks
   id                    CHAR(32) PK               -- deterministic, see §9.3
@@ -343,7 +345,7 @@ chunks
   heading_path          TEXT[] NOT NULL           -- ["Deployment", "Docker Deployment"]
   section_anchor        TEXT NOT NULL             -- "docker-deployment"
   content               TEXT NOT NULL             -- raw chunk text shown to the LLM
-  content_hash          CHAR(64) NOT NULL
+  content_hash          CHAR(64) NOT NULL         -- indexed (P4)
   start_line, end_line  INTEGER NOT NULL
   token_estimate        INTEGER NOT NULL
   embedding             VECTOR(d)                 -- (P9) d = configured dimension
@@ -354,8 +356,8 @@ chunks
   INDEX (content_hash, embedding_model)           -- (P9) embedding reuse lookup
   INDEX gin (search_vector)                       -- (P17)
 
-index_state                                        -- single-row key/value
-  key TEXT PK, value TEXT                          -- embedding_model, embedding_dimension, schema notes
+index_state                                        -- key/value
+  key TEXT PK, value TEXT, updated_at TIMESTAMPTZ  -- embedding_model, embedding_dimension, ...
 ```
 
 ---
@@ -462,9 +464,18 @@ Elasticsearch or OpenSearch.
 in Phase 18: an ONNX cross-encoder (light, no PyTorch) vs. an LLM-based reranker via the
 existing `LLMProvider`. We will not ship a multi-gigabyte PyTorch image.
 
-**D17 — Migrations run before the server starts.** The container entrypoint runs
-`alembic upgrade head` and then `uvicorn`. The schema is owned only by Alembic — never
-`create_all()`.
+**D17 — Migrations run before the server starts.** The container entrypoint
+(`docker/entrypoint.sh`) runs `python -m easyrag.storage.migrate` (Alembic `upgrade head`) and
+then `exec`s the server, so uvicorn stays PID 1. A migration failure exits the container
+instead of serving an old schema. The schema is owned only by Alembic — never `create_all()`.
+*Refined in Phase 4:*
+- Migrations live **inside the package** (`easyrag/storage/migrations`) because the runtime
+  image contains only the installed package; `alembic.ini` exists only for developer commands.
+- `env.py` holds a Postgres advisory lock for the duration of a migration run, so containers
+  starting simultaneously are serialised (verified by a multi-process integration test).
+- Readiness reports `schema: outdated` when the database revision differs from the code's head.
+- An integration test runs Alembic autogenerate against a migrated database and requires an
+  empty diff, so ORM models and migrations cannot drift apart.
 
 **D18 — Health semantics.** `/health/live` = the process is up. `/health/ready` = DB
 reachable and migrated, model provider reachable, configured models present. Indexing

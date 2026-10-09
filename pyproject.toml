@@ -5,6 +5,7 @@ description = "Self-hosted, local-first RAG over Markdown documents"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "alembic>=1.20.0",
     "fastapi>=0.143.0",
     "psycopg[binary]>=3.3.6",
     "pydantic-settings>=2.15.0",

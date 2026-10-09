@@ -37,6 +37,7 @@ RUN groupadd --system --gid 10001 easyrag \
  && useradd --system --uid 10001 --gid easyrag --no-create-home --shell /usr/sbin/nologin easyrag
 
 COPY --from=builder /app/.venv /app/.venv
+COPY --chmod=0755 docker/entrypoint.sh /usr/local/bin/easyrag-entrypoint
 
 ENV PATH="/app/.venv/bin:${PATH}" \
     PYTHONUNBUFFERED=1 \
@@ -49,4 +50,6 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
     CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/live', timeout=2)"]
 
+# Migrations run first; the entrypoint then execs CMD so uvicorn stays PID 1.
+ENTRYPOINT ["easyrag-entrypoint"]
 CMD ["uvicorn", "--factory", "easyrag.main:create_app", "--host", "0.0.0.0", "--port", "8000"]

@@ -63,8 +63,9 @@ Decision references (D1–D24) point to [ARCHITECTURE.md §9](ARCHITECTURE.md#9-
 
 ### Phase 4 — Schema and Alembic migrations
 - **Objective:** Alembic setup; the `documents`, `chunks` (without the embedding column) and `index_state` tables; `CREATE EXTENSION vector`. (D17)
-- **Files:** `alembic.ini`, `migrations/`, `storage/models.py`, container entrypoint runs migrations.
-- **Tests:** integration: upgrade → downgrade → upgrade round trip; the schema matches the models (autogenerate produces an empty diff).
+- **Files:** `alembic.ini`, `docker/entrypoint.sh`, `storage/{models,migrate}.py`, `storage/migrations/` (in-package), schema check in readiness.
+- **Tests:** integration (fresh database per test): upgrade → downgrade → upgrade round trip; idempotent upgrade; concurrent migration processes; the schema matches the models (autogenerate produces an empty diff); constraints and cascade; readiness requires the current schema. Unit: model metadata, single migration head, readiness with schema outdated or timing out.
+- **Status:** ✅ done
 - **Commit:** `feat: add database schema and migrations`
 
 ### Phase 5 — Markdown document loading
@@ -95,7 +96,7 @@ Decision references (D1–D24) point to [ARCHITECTURE.md §9](ARCHITECTURE.md#9-
 
 ### Phase 9 — Store chunks and embeddings in pgvector
 - **Objective:** a migration adding the `embedding` + `embedding_model` columns and the HNSW index; `VectorStore` + `PgVectorStore`; `DocumentRepository`; a basic full (non-incremental) indexer; `easyrag index` CLI; startup model/dimension guard. (D10 atomicity, D11)
-- **Files:** `migrations/versions/…`, `storage/{repositories,vector_store}.py`, `ingestion/indexer.py`, `cli.py`
+- **Files:** `storage/migrations/versions/0002_…`, `storage/{repositories,vector_store}.py`, `ingestion/indexer.py`, `cli.py`
 - **Tests:** integration: indexing a fixture corpus stores the expected rows; re-running yields the same rows; dimension mismatch refuses to start.
 - **Commit:** `feat: store document chunks and embeddings`
 
