@@ -7,7 +7,7 @@ the environment; everything else receives a ``Settings`` instance.
 
 from typing import Annotated, Literal
 
-from pydantic import BeforeValidator, Field, SecretStr
+from pydantic import AnyHttpUrl, BeforeValidator, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
@@ -36,3 +36,20 @@ class Settings(BaseSettings):
 
     # Upper bound for each dependency check performed by /health/ready.
     health_check_timeout_seconds: float = Field(default=2.0, gt=0, le=30)
+
+    # --- Ollama ------------------------------------------------------------------------
+    # Docker Compose sets http://ollama:11434; the default suits `uv run` with a host Ollama.
+    ollama_base_url: AnyHttpUrl = AnyHttpUrl("http://localhost:11434")
+    # Generous by default: the first request after startup may have to load the model.
+    ollama_timeout_seconds: float = Field(default=120.0, gt=0, le=3600)
+
+    # --- Embeddings --------------------------------------------------------------------
+    # Pin a tag, not "latest": a silently updated model would change every vector.
+    embedding_model: str = Field(default="nomic-embed-text:v1.5", min_length=1)
+    # Must equal the model's output size. At most 2000: pgvector's HNSW index limit.
+    embedding_dimension: int = Field(default=768, ge=2, le=2000)
+    embedding_batch_size: int = Field(default=32, ge=1, le=512)
+    # Model-specific instructions prepended to queries and documents (nomic-embed-text
+    # expects these). Change them together with the model.
+    embedding_query_prefix: str = "search_query: "
+    embedding_document_prefix: str = "search_document: "

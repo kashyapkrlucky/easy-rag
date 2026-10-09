@@ -4,7 +4,7 @@ A self-hosted, local-first Retrieval-Augmented Generation system for your Markdo
 documents. It runs entirely on your machine — Python, FastAPI, PostgreSQL + pgvector and
 Ollama — with no external SaaS.
 
-> **Status: Phase 7 — embedding provider abstraction.** Documents can be loaded, parsed and chunked; the embedding port is defined (library only, no real model yet).
+> **Status: Phase 8 — Ollama embeddings.** The stack runs PostgreSQL + pgvector and Ollama with an embedding model; documents can be loaded, parsed, chunked and embedded (library only, no indexing or API yet).
 > See [ROADMAP.md](ROADMAP.md) for progress.
 
 ## What it will do
@@ -50,11 +50,18 @@ answer, EasyRAG says it doesn't know instead of guessing.
 cp .env.example .env                                # then set POSTGRES_PASSWORD in .env
 docker compose up --build -d
 curl http://localhost:8000/health/live              # {"status":"ok"}
-curl http://localhost:8000/health/ready             # {"status":"ready","checks":{"database":"ok","schema":"ok"}}
+curl http://localhost:8000/health/ready             # {"status":"ready","checks":{"database":"ok","schema":"ok","embedding_model":"ok"}}
 docker compose down                                 # add -v to also delete the database volume
 ```
 
 Database migrations are applied automatically each time the app container starts.
+On first start, `ollama-pull` downloads the embedding model (`nomic-embed-text:v1.5`,
+~274 MB). Until it finishes, readiness reports `"embedding_model": "missing"`.
+
+**macOS:** Docker can't use the Apple GPU, so the bundled Ollama runs on CPU (and its image
+is ~4 GB). If you have [Ollama](https://ollama.com) installed natively, it's much faster:
+run `ollama pull nomic-embed-text:v1.5` and set
+`EASYRAG_OLLAMA_BASE_URL=http://host.docker.internal:11434` in `.env`.
 
 The API is published on `127.0.0.1` only. Set `EASYRAG_PORT` in `.env` to change the host port.
 PostgreSQL is not published to the host.
@@ -86,10 +93,13 @@ uv run mypy
 uv run pytest                                       # unit tests; integration tests skip
 ```
 
-Integration tests run against the development database when `EASYRAG_TEST_DATABASE_URL` is set:
+Integration tests run against the development database when `EASYRAG_TEST_DATABASE_URL` is set,
+and end-to-end tests against a real Ollama when `EASYRAG_TEST_OLLAMA_URL` is set:
 
 ```bash
-EASYRAG_TEST_DATABASE_URL=postgresql+psycopg://easyrag:<password>@127.0.0.1:5432/easyrag uv run pytest
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d db ollama ollama-pull
+EASYRAG_TEST_DATABASE_URL=postgresql+psycopg://easyrag:<password>@127.0.0.1:5432/easyrag \
+EASYRAG_TEST_OLLAMA_URL=http://127.0.0.1:11434 uv run pytest
 ```
 
 Database migrations (with `EASYRAG_DATABASE_URL` set):

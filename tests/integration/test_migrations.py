@@ -124,7 +124,12 @@ def test_readiness_requires_current_schema(
         upgrade_to_head(database_url)
         after = client.get("/health/ready")
 
+    # Ollama is not part of integration tests, so only the database checks are asserted.
     assert before.status_code == 503
-    assert before.json()["checks"] == {"database": "ok", "schema": "outdated"}
-    assert after.status_code == 200
-    assert after.json() == {"status": "ready", "checks": {"database": "ok", "schema": "ok"}}
+    assert before.json()["checks"] | {"embedding_model": None} == {
+        "database": "ok",
+        "schema": "outdated",
+        "embedding_model": None,
+    }
+    assert after.json()["checks"]["database"] == "ok"
+    assert after.json()["checks"]["schema"] == "ok"

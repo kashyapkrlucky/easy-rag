@@ -53,6 +53,10 @@ def normalize(vector: Sequence[float]) -> Vector:
     return [component / norm for component in vector]
 
 
+def _is_number(value: object) -> bool:
+    return isinstance(value, int | float) and not isinstance(value, bool)
+
+
 def validate_embeddings(
     vectors: Sequence[Sequence[float]], *, expected_count: int, dimension: int
 ) -> list[Vector]:
@@ -71,6 +75,8 @@ def validate_embeddings(
             raise EmbeddingResponseError(
                 f"embedding {position} has dimension {len(vector)}, expected {dimension}"
             )
+        if not all(_is_number(component) for component in vector):
+            raise EmbeddingResponseError(f"embedding {position} contains non-numeric values")
         if not all(math.isfinite(component) for component in vector):
             raise EmbeddingResponseError(f"embedding {position} contains non-finite values")
         try:

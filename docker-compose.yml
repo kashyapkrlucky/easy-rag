@@ -9,9 +9,13 @@ services:
         required: false
     environment:
       EASYRAG_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-easyrag}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env (see .env.example)}@db:5432/${POSTGRES_DB:-easyrag}
+      # Point at the host's Ollama instead with http://host.docker.internal:11434
+      EASYRAG_OLLAMA_BASE_URL: ${EASYRAG_OLLAMA_BASE_URL:-http://ollama:11434}
     ports:
       # Published on localhost only: the API has no authentication until it is added.
       - "127.0.0.1:${EASYRAG_PORT:-8000}:8000"
+    # Not waiting for ollama-pull on purpose: the API starts even if the model download
+    # is slow or impossible (offline); /health/ready reports the model as "missing".
     depends_on:
       db:
         condition: service_healthy
@@ -42,5 +46,30 @@ services:
     restart: unless-stopped
     # Not published to the host. For development access use docker-compose.dev.yml.
 
+  ollama:
+    image: ollama/ollama:0.34.4
+    volumes:
+      - ollama:/root/.ollama  # downloaded models survive restarts
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+    # Not published to the host. For development access use docker-compose.dev.yml.
+
+  # One-shot: downloads the embedding model (a no-op when it is already present), then exits.
+  ollama-pull:
+    image: ollama/ollama:0.34.4
+    entrypoint: ["ollama", "pull", "${EASYRAG_EMBEDDING_MODEL:-nomic-embed-text:v1.5}"]
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    depends_on:
+      ollama:
+        condition: service_healthy
+    restart: "no"
+
 volumes:
   pgdata:
+  ollama:

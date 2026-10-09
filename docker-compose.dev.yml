@@ -1,6 +1,7 @@
-# Development overrides: publishes PostgreSQL on localhost for integration tests and psql.
+# Development overrides: publishes PostgreSQL and Ollama on localhost for
+# integration/e2e tests, psql and curl.
 #
-#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d db
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d db ollama ollama-pull
 #
 # Not used by end users.
 
@@ -8,3 +9,7 @@ services:
   db:
     ports:
       - "127.0.0.1:${EASYRAG_DB_PORT:-5432}:5432"
+
+  ollama:
+    ports:
+      - "127.0.0.1:${EASYRAG_OLLAMA_PORT:-11434}:11434"

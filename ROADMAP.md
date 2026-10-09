@@ -57,7 +57,7 @@ Decision references (D1–D24) point to [ARCHITECTURE.md §9](ARCHITECTURE.md#9-
 - **Files:** `docker-compose.yml` (pgvector/pgvector image, volume, healthcheck), `storage/database.py`,
   `docker-compose.dev.yml`, `container.py`, `api/dependencies.py`, readiness in `routes/health.py`, integration test scaffold.
 - **Tests:** unit test for readiness with a failing DB dependency → 503; integration test pings DB and confirms the `vector` extension is available.
-- **Not yet:** tables; `CREATE EXTENSION` (Phase 4); `api/errors.py` (moved to Phase 8, with the first domain exceptions).
+- **Not yet:** tables; `CREATE EXTENSION` (Phase 4); `api/errors.py` (moved to Phase 10, the first endpoint that calls a provider).
 - **Status:** ✅ done
 - **Commit:** `feat: add PostgreSQL vector database`
 
@@ -94,8 +94,10 @@ Decision references (D1–D24) point to [ARCHITECTURE.md §9](ARCHITECTURE.md#9-
 
 ### Phase 8 — Ollama embeddings
 - **Objective:** an httpx-based Ollama adapter (batching, timeouts, retries, query/document prefixes); an Ollama compose service with a model-pull step; readiness checks the model. (D3, D19)
-- **Files:** `embeddings/ollama.py`, `api/errors.py`, `docker-compose.yml`, `container.py`, README notes on host-Ollama for macOS.
-- **Tests:** `respx`-mocked happy path, batching, errors and timeouts; the conformance suite; opt-in e2e against real Ollama.
+- **Files:** `embeddings/ollama.py`, `health.py` (readiness registry), `config.py`, `container.py`, `main.py` (`container_factory`), compose (`ollama`, `ollama-pull`), `tests/e2e/`, `tests/unit/test_dependencies.py`.
+- **Tests:** an in-process fake Ollama (`httpx2.MockTransport`): request shape and prefixes, batching, validation, retry/no-retry matrix, readiness states, and the contract suite. Readiness registry (concurrency, timeouts, no credential leaks). Packaging guard. Opt-in e2e: contract + semantic sanity against real Ollama.
+- **Not yet:** `api/errors.py` (Phase 10, the first endpoint that calls a provider).
+- **Status:** ✅ done
 - **Decides:** the default embedding model + dimension.
 - **Commit:** `feat: add Ollama embedding provider`
 
@@ -107,7 +109,7 @@ Decision references (D1–D24) point to [ARCHITECTURE.md §9](ARCHITECTURE.md#9-
 
 ### Phase 10 — Vector similarity retrieval
 - **Objective:** the `Retriever` Protocol + `VectorRetriever`, with configurable top-k, an optional min score and deterministic tie-breaking; a `POST /api/v1/retrieve` debug endpoint.
-- **Files:** `retrieval/{base,vector}.py`, `api/schemas.py`, `api/routes/retrieve.py`
+- **Files:** `retrieval/{base,vector}.py`, `api/schemas.py`, `api/errors.py`, `api/routes/retrieve.py`
 - **Tests:** unit with an in-memory store; integration: a known query returns the expected section first; the threshold filters results.
 - **Commit:** `feat: add vector similarity retrieval`
 
@@ -120,7 +122,7 @@ Decision references (D1–D24) point to [ARCHITECTURE.md §9](ARCHITECTURE.md#9-
 ### Phase 12 — Ollama LLM generation
 - **Objective:** an Ollama `/api/chat` adapter with explicit `num_ctx`, temperature, seed, timeouts and token-usage extraction; readiness checks the chat model. (D14)
 - **Files:** `llm/ollama.py`, `docker-compose.yml` (model pull), `container.py`
-- **Tests:** `respx` mocks for options passthrough, usage parsing and error mapping; opt-in e2e.
+- **Tests:** fake Ollama (`httpx2.MockTransport`) for options passthrough, usage parsing and error mapping; opt-in e2e.
 - **Decides:** the default chat model.
 - **Commit:** `feat: add Ollama LLM provider`
 

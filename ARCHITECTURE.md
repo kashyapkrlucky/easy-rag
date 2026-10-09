@@ -149,7 +149,7 @@ easy-rag/
 │   │   └── answers.py                (P13) Answer, Citation, RagTrace
 │   ├── api/
 │   │   ├── dependencies.py           (P3)
-│   │   ├── errors.py                 (P8)  domain exception → HTTP mapping
+│   │   ├── errors.py                 (P10) domain exception → HTTP mapping
 │   │   ├── schemas.py                (P10)
 │   │   └── routes/
 │   │       ├── health.py             (P1, readiness in P3)
@@ -405,8 +405,21 @@ driver. The `pgvector` Python package supplies the SQLAlchemy `Vector` type.
 
 **D3 — Talk to Ollama over plain HTTP (httpx), not the Ollama SDK.** We need two
 endpoints (`/api/embed`, `/api/chat`). Owning the client gives explicit timeouts,
-retries, error mapping and easy mocking (`respx`). It also keeps an OpenAI-compatible
+retries, error mapping and easy mocking. It also keeps an OpenAI-compatible
 adapter trivial to add later.
+*Implemented in Phase 8:*
+- The client library is `httpx2`, the httpx successor that Starlette's test client also
+  uses. That gives one HTTP stack, and its built-in `MockTransport` replaces `respx`
+  (which supports only the old `httpx`).
+- The container owns one `AsyncClient` per Ollama base URL (5 s connect timeout, read
+  timeout `EASYRAG_OLLAMA_TIMEOUT_SECONDS`), injects it into adapters and closes it on
+  shutdown.
+- Retries: connection errors, timeouts, 429 and 5xx are retried with exponential backoff
+  (2 retries), then `EmbeddingProviderUnavailableError`. A 404 (model not pulled) fails
+  immediately with the exact `ollama pull …` command. Other 4xx responses and malformed
+  JSON become `EmbeddingResponseError`.
+- `/api/embed` is called with `truncate: false`. Ollama would otherwise *silently*
+  truncate over-long input and embed only part of a chunk; we prefer a loud error.
 
 **D4 — Configuration via pydantic-settings.** All settings use the `EASYRAG_` prefix,
 are validated at startup (fail fast with a clear message) and are injected — no module
@@ -467,6 +480,8 @@ code, setext headings, front matter. Front matter is parsed with PyYAML.
 stripped, `\r\n` → `\n`. A document is re-indexed when its `content_hash` changes **or**
 when the `pipeline_fingerprint` changes (parser/chunker version, chunk params, embedding
 model). A content hash alone would silently keep stale chunks after a config change.
+*Noted in Phase 8:* the fingerprint must include the embedding **query/document prefixes**,
+which change every vector, not just the model name.
 
 **D9 — Deterministic chunk IDs.**
 `chunk.id = sha256(source_path ␟ section_anchor ␟ index_in_section ␟ content_hash)[:32]`.
@@ -492,6 +507,10 @@ dimension. The dimension comes from config at migration time, and `index_state` 
 `embedding_model` + `dimension`. At startup the app checks them against config and
 **refuses to start on mismatch**, with instructions to rebuild the index — never silently
 mixing vector spaces. Cosine distance; `score = 1 − distance`.
+*Phase 8:* `EASYRAG_EMBEDDING_DIMENSION` is validated as ≤ 2000, pgvector's HNSW limit for
+the `vector` type, and readiness compares it with the model's reported
+`embedding_length` (`embedding_model: misconfigured` on mismatch). So a wrong dimension
+is caught before any vector is stored.
 
 **D12 — Two-layer grounding.**
 1. *Retrieval gate (deterministic):* if retrieval returns nothing above the similarity
@@ -541,8 +560,14 @@ instead of serving an old schema. The schema is owned only by Alembic — never 
 reachable and migrated, model provider reachable, configured models present. Indexing
 progress is reported separately (`/api/v1/index/status`) rather than making the app
 "not ready" for minutes on a large first index.
-Readiness returns `{"status": "ready"|"not_ready", "checks": {"<name>": "ok"|"unavailable"}}`
-with 200 or 503. Every check has a timeout (`EASYRAG_HEALTH_CHECK_TIMEOUT_SECONDS`), and
+Readiness returns `{"status": "ready"|"not_ready", "checks": {"<name>": <status>}}` with
+200 or 503. Status is one of `ok`, `unavailable`, `outdated` (schema), `missing` (model not
+pulled) or `misconfigured` (dimension mismatch).
+*Since Phase 8* checks are a registry (`container.readiness_checks`) run **concurrently**:
+`database`, `schema` and `embedding_model` (via Ollama `/api/show`, with no inference).
+The route knows no specific dependency, and tests inject checks through
+`create_app(container_factory=...)`. The app does **not** wait for the model download:
+offline or slow pulls leave the API up, with `embedding_model: missing`. Every check has a timeout (`EASYRAG_HEALTH_CHECK_TIMEOUT_SECONDS`), and
 failures are logged by exception type only (messages can contain connection details). The
 app starts even when dependencies are down, so liveness stays green and the container
 isn't restart-looped while Postgres boots.
@@ -551,6 +576,12 @@ isn't restart-looped while Postgres boots.
 `EASYRAG_OLLAMA_BASE_URL` can point at the host (`http://host.docker.internal:11434`).
 This matters on macOS, where Docker containers cannot use the Apple GPU and in-container
 inference is CPU-only and slow.
+*Implemented in Phase 8:* `ollama/ollama:0.34.4` with a persistent `ollama` volume, plus a
+one-shot `ollama-pull` service that downloads `EASYRAG_EMBEDDING_MODEL` (a no-op when it's
+already present). Ollama isn't published to the host except via `docker-compose.dev.yml`.
+Measured on Apple silicon in Docker (CPU only): 64 chunks embed in about 2.9 s. Note the
+Ollama image is about 4.2 GB because it bundles GPU runtimes; Phase 24 should make the
+host-Ollama setup first-class.
 
 **D20 — File watching with a polling fallback.** Phase 16 uses `watchfiles` with
 debouncing. Bind-mounted volumes on Docker Desktop don't always deliver native file
@@ -648,8 +679,11 @@ Chat contract (target):
 | `EASYRAG_DATABASE_URL` | — (required) | 3 |
 | `EASYRAG_DOCS_DIR` | `/data/docs` (container) | 9 |
 | `EASYRAG_CHUNK_MAX_TOKENS` / `_OVERLAP_TOKENS` | `400` / `50` | 9 |
-| `EASYRAG_OLLAMA_BASE_URL` | `http://ollama:11434` | 8 |
-| `EASYRAG_EMBEDDING_MODEL` / `_DIMENSION` | chosen in P8 | 8 |
+| `EASYRAG_OLLAMA_BASE_URL` | `http://localhost:11434` (Compose: `http://ollama:11434`) | 8 |
+| `EASYRAG_OLLAMA_TIMEOUT_SECONDS` | `120` | 8 |
+| `EASYRAG_EMBEDDING_MODEL` / `_DIMENSION` | `nomic-embed-text:v1.5` / `768` | 8 |
+| `EASYRAG_EMBEDDING_BATCH_SIZE` | `32` | 8 |
+| `EASYRAG_EMBEDDING_QUERY_PREFIX` / `_DOCUMENT_PREFIX` | `"search_query: "` / `"search_document: "` | 8 |
 | `EASYRAG_RETRIEVAL_TOP_K` | `5` | 10 |
 | `EASYRAG_RETRIEVAL_MIN_SCORE` | unset (gate off) | 10 / 14 |
 | `EASYRAG_LLM_MODEL`, `_NUM_CTX`, `_TEMPERATURE`, `_SEED` | chosen in P12 / 8192 / 0 / 42 | 12 |
@@ -667,8 +701,9 @@ The exact model defaults are chosen and justified in Phases 8 and 12.
 |---|---|---|---|
 | Unit | Parser, chunker, hashing, prompt builder, citation parser, RAG service with fakes, API with overridden deps | None | Always; must be fast (< 5 s) |
 | Integration | Migrations, PgVectorStore, indexer against a real DB, readiness | Postgres + pgvector (compose) | `pytest -m integration`; skipped when no test DB is configured |
-| Adapter contract | Ollama adapters against recorded HTTP responses | `respx` mocks | Always |
-| End-to-end | Full stack with real models | Compose + Ollama | `pytest -m e2e`, opt-in |
+| Adapter contract | Ollama adapters against an in-process fake Ollama | `httpx2.MockTransport` | Always |
+| End-to-end | Contract suite + semantic sanity against a real model | Compose + Ollama | `EASYRAG_TEST_OLLAMA_URL`, `pytest -m e2e` |
+| Packaging guard | Every third-party import in `src/` is a declared runtime dependency | None | Always |
 | Evaluation | Retrieval recall@k, MRR, citation precision, refusal accuracy, latency | Full stack | `easyrag eval`; a tracked result, not a pass/fail unit test |
 
 The deterministic `FakeEmbeddingProvider` (hash-seeded vectors) and the scripted
@@ -692,7 +727,7 @@ The deterministic `FakeEmbeddingProvider` (hash-seeded vectors) and the scripted
 
 | Question | Phase |
 |---|---|
-| Default embedding model and dimension (quality vs. CPU speed) | 8 |
+| ~~Default embedding model and dimension~~ → `nomic-embed-text:v1.5`, 768: 274 MB, fast on CPU, 8192-token context, documented prefixes; English-centric (alternatives in `.env.example`) | 8 ✅ |
 | Default chat model (instruction-following + citation reliability at small sizes) | 12 |
 | Similarity threshold default per model | 19 |
 | Reranker implementation (ONNX cross-encoder vs. LLM rerank) | 18 |

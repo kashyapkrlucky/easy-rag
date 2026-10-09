@@ -12,21 +12,27 @@ from fastapi import FastAPI
 from easyrag import __version__
 from easyrag.api.routes import health
 from easyrag.config import Settings
-from easyrag.container import build_container
+from easyrag.container import ContainerFactory, build_container
 from easyrag.observability.logging import configure_logging
 
 logger = logging.getLogger(__name__)
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
-    """Build the application. ``settings`` defaults to values from the environment."""
+def create_app(
+    settings: Settings | None = None, container_factory: ContainerFactory = build_container
+) -> FastAPI:
+    """Build the application.
+
+    ``settings`` defaults to values from the environment; ``container_factory`` lets tests
+    substitute collaborators (e.g. fake readiness checks or providers).
+    """
     resolved = settings if settings is not None else Settings()
     configure_logging(resolved.log_level)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger.info("EasyRAG %s starting", __version__)
-        container = build_container(resolved)
+        container = container_factory(resolved)
         app.state.container = container
         try:
             yield

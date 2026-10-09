@@ -1,98 +1,122 @@
 import asyncio
 import logging
+import time
+from collections.abc import Mapping
+from dataclasses import replace
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy.ext.asyncio import AsyncEngine
 
-from easyrag.api.routes import health
+from easyrag.config import Settings
+from easyrag.container import AppContainer, build_container
+from easyrag.health import CheckStatus, ReadinessCheck
 from easyrag.main import create_app
-from easyrag.storage.migrate import SchemaStatus
 from tests.support import SettingsFactory
 
 
-async def healthy_ping(engine: AsyncEngine, timeout_seconds: float) -> None:
-    return None
-
-
-def schema_reporting(status: SchemaStatus) -> object:
-    async def check(engine: AsyncEngine) -> SchemaStatus:
+def check_returning(status: CheckStatus) -> ReadinessCheck:
+    async def check() -> CheckStatus:
         return status
 
     return check
 
 
-def test_ready_when_database_responds_and_schema_is_current(
-    make_settings: SettingsFactory, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(health, "ping", healthy_ping)
-    monkeypatch.setattr(health, "schema_status", schema_reporting(SchemaStatus.CURRENT))
+def app_with_checks(settings: Settings, checks: Mapping[str, ReadinessCheck]) -> FastAPI:
+    def factory(settings: Settings) -> AppContainer:
+        return replace(build_container(settings), readiness_checks=checks)
 
-    with TestClient(create_app(make_settings())) as client:
+    return create_app(settings, container_factory=factory)
+
+
+def get_ready(app: FastAPI) -> tuple[int, dict[str, object]]:
+    with TestClient(app) as client:
         response = client.get("/health/ready")
-
-    assert response.status_code == 200
-    assert response.json() == {"status": "ready", "checks": {"database": "ok", "schema": "ok"}}
+    return response.status_code, response.json()
 
 
-def test_not_ready_when_schema_is_outdated(
-    make_settings: SettingsFactory, monkeypatch: pytest.MonkeyPatch
+def test_ready_when_every_check_passes(make_settings: SettingsFactory) -> None:
+    checks = {"database": check_returning("ok"), "embedding_model": check_returning("ok")}
+
+    assert get_ready(app_with_checks(make_settings(), checks)) == (
+        200,
+        {"status": "ready", "checks": {"database": "ok", "embedding_model": "ok"}},
+    )
+
+
+@pytest.mark.parametrize("failing", ["outdated", "missing", "misconfigured", "unavailable"])
+def test_not_ready_when_any_check_fails(
+    make_settings: SettingsFactory, failing: CheckStatus
 ) -> None:
-    monkeypatch.setattr(health, "ping", healthy_ping)
-    monkeypatch.setattr(health, "schema_status", schema_reporting(SchemaStatus.OUTDATED))
+    checks = {"database": check_returning("ok"), "other": check_returning(failing)}
 
-    with TestClient(create_app(make_settings())) as client:
-        response = client.get("/health/ready")
+    status, body = get_ready(app_with_checks(make_settings(), checks))
 
-    assert response.status_code == 503
-    assert response.json() == {
-        "status": "not_ready",
-        "checks": {"database": "ok", "schema": "outdated"},
-    }
+    assert status == 503
+    assert body == {"status": "not_ready", "checks": {"database": "ok", "other": failing}}
 
 
-def test_not_ready_when_database_is_unreachable(
+def test_check_raising_is_reported_unavailable_without_leaking_details(
     make_settings: SettingsFactory, caplog: pytest.LogCaptureFixture
 ) -> None:
-    with TestClient(create_app(make_settings())) as client, caplog.at_level(logging.WARNING):
-        response = client.get("/health/ready")
+    async def broken() -> CheckStatus:
+        raise ConnectionError("postgresql://easyrag:secret@db failed")
 
-    assert response.status_code == 503
-    assert response.json() == {
-        "status": "not_ready",
-        "checks": {"database": "unavailable", "schema": "unavailable"},
-    }
-    assert "secret" not in caplog.text  # credentials never reach the logs
+    app = app_with_checks(make_settings(), {"database": broken})
+    # create_app() reconfigures logging, replacing the root handlers that caplog installed.
+    root = logging.getLogger()
+    root.addHandler(caplog.handler)
+    try:
+        status, body = get_ready(app)
+    finally:
+        root.removeHandler(caplog.handler)
 
-
-def test_not_ready_when_database_check_times_out(
-    make_settings: SettingsFactory, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    async def hanging_ping(engine: AsyncEngine, timeout_seconds: float) -> None:
-        async with asyncio.timeout(timeout_seconds):
-            await asyncio.sleep(60)
-
-    monkeypatch.setattr(health, "ping", hanging_ping)
-
-    with TestClient(create_app(make_settings(health_check_timeout_seconds=0.05))) as client:
-        response = client.get("/health/ready")
-
-    assert response.status_code == 503
-    assert response.json()["checks"]["database"] == "unavailable"
+    assert (status, body["checks"]) == (503, {"database": "unavailable"})
+    assert "ConnectionError" in caplog.text
+    assert "secret" not in caplog.text
 
 
-def test_not_ready_when_schema_check_times_out(
-    make_settings: SettingsFactory, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    async def hanging_schema_status(engine: AsyncEngine) -> SchemaStatus:
+def test_hanging_check_times_out(make_settings: SettingsFactory) -> None:
+    async def hanging() -> CheckStatus:
         await asyncio.sleep(60)
-        return SchemaStatus.CURRENT
+        return "ok"
 
-    monkeypatch.setattr(health, "ping", healthy_ping)
-    monkeypatch.setattr(health, "schema_status", hanging_schema_status)
+    settings = make_settings(health_check_timeout_seconds=0.05)
+    status, body = get_ready(app_with_checks(settings, {"database": hanging}))
 
-    with TestClient(create_app(make_settings(health_check_timeout_seconds=0.05))) as client:
+    assert (status, body["checks"]) == (503, {"database": "unavailable"})
+
+
+def test_checks_run_concurrently(make_settings: SettingsFactory) -> None:
+    async def slow() -> CheckStatus:
+        await asyncio.sleep(0.3)
+        return "ok"
+
+    app = app_with_checks(make_settings(), {"a": slow, "b": slow, "c": slow})
+    with TestClient(app) as client:
+        started = time.perf_counter()
         response = client.get("/health/ready")
+        elapsed = time.perf_counter() - started
 
-    assert response.status_code == 503
-    assert response.json()["checks"]["schema"] == "unavailable"
+    assert response.status_code == 200
+    assert elapsed < 0.6  # sequential execution would take at least 0.9 s
+
+
+def test_default_container_registers_all_dependencies(make_settings: SettingsFactory) -> None:
+    assert list(build_container(make_settings()).readiness_checks) == [
+        "database",
+        "schema",
+        "embedding_model",
+    ]
+
+
+def test_unreachable_dependencies_are_reported(make_settings: SettingsFactory) -> None:
+    # Real checks against addresses where nothing listens.
+    status, body = get_ready(create_app(make_settings()))
+
+    assert status == 503
+    assert body["checks"] == {
+        "database": "unavailable",
+        "schema": "unavailable",
+        "embedding_model": "unavailable",
+    }
