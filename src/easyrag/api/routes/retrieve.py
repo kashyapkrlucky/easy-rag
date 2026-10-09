@@ -11,11 +11,13 @@ router = APIRouter(prefix="/api/v1", tags=["retrieval"])
 @router.post("/retrieve")
 async def retrieve(request: RetrieveRequest, container: ContainerDep) -> RetrieveResponse:
     """Return the chunks most similar to ``query``, best first."""
-    chunks = await container.retriever.retrieve(
+    mode = request.mode or container.settings.retrieval_mode
+    chunks = await container.retrievers[mode].retrieve(
         request.query, top_k=request.top_k, min_score=request.min_score
     )
     return RetrieveResponse(
         query=request.query,
+        mode=mode,
         embedding_model=container.embeddings.model_id,
         results=[RetrievedChunkResponse.from_domain(chunk) for chunk in chunks],
     )

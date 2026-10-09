@@ -22,6 +22,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from easyrag.domain.chunks import RetrievedChunk
+from easyrag.stopwords import STOPWORDS
 
 SENTENCE_SUPPORT = 0.6
 ANSWER_COVERAGE = 0.7
@@ -29,16 +30,6 @@ ANSWER_COVERAGE = 0.7
 _WORD = re.compile(r"[^\W_]+")  # letters/digits; "_", "-", "." and ":" separate words
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s+|\n+")
 _MARKER = re.compile(r"\[\s*\d+(?:\s*[,;]\s*\d+)*\s*\]")
-_STOPWORD_TEXT = """
-a about above after again against all also am an and any are as at be because been
-before being below between both but by can could did do does doing down during each few
-for from further had has have having he her here hers him his how i if in into is it
-its itself just me more most my no nor not now of off on once only or other our ours
-out over own same she should so some such than that the their theirs them then there
-these they this those through to too under until up use used uses using very was we
-were what when where which while who whom why will with would you your yours
-"""
-_STOPWORDS = frozenset(_STOPWORD_TEXT.split())
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,7 +77,7 @@ def _content_words(text: str) -> set[str]:
     return {
         _singular(word)
         for word in (w.lower() for w in _WORD.findall(text))
-        if word not in _STOPWORDS and (len(word) > 2 or word.isdigit())
+        if word not in STOPWORDS and (len(word) > 2 or word.isdigit())
     }
 
 

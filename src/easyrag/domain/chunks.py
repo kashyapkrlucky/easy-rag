@@ -37,8 +37,13 @@ class RetrievedChunk:
     content: str
     start_line: int
     end_line: int
-    # Cosine similarity in [-1, 1]; higher is more similar.
+    # Ranking score of the retriever that produced this result (higher is better):
+    # cosine similarity (vector), matched IDF share in [0, 1] (keyword), or the
+    # Reciprocal Rank Fusion score (hybrid). Compare scores only within one mode.
     score: float
+    # Component scores, when the chunk was found by that method.
+    vector_score: float | None = None
+    keyword_score: float | None = None
 
     @property
     def section(self) -> str:

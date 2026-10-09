@@ -4,7 +4,7 @@ A self-hosted, local-first Retrieval-Augmented Generation system for your Markdo
 documents. It runs entirely on your machine — Python, FastAPI, PostgreSQL + pgvector and
 Ollama — with no external SaaS.
 
-> **Status: Phase 16 — live re-indexing.** Add, edit or delete Markdown files and the index follows within seconds. Ask questions with `POST /api/v1/chat` and get answers with their sources.
+> **Status: Phase 17 — hybrid retrieval.** Questions are matched both by meaning and by exact terms (setting names, error codes, versions). The index follows your files live; ask with `POST /api/v1/chat`.
 > See [ROADMAP.md](ROADMAP.md) for progress.
 
 ## What it will do
@@ -174,7 +174,14 @@ curl -s localhost:8000/api/v1/retrieve -H 'Content-Type: application/json' \
 ```
 
 `top_k` (1–50, default `EASYRAG_RETRIEVAL_TOP_K`) and `min_score` (cosine similarity,
-default off) are optional. Errors always have the shape
+default off) are optional.
+
+Retrieval is **hybrid** by default (`EASYRAG_RETRIEVAL_MODE`). Semantic (vector) search
+finds paraphrases, keyword search finds exact terms such as `EASYRAG_WATCH_FORCE_POLLING`,
+`v1.5` or an error code, and the two rankings are merged. Pass `"mode": "vector"`,
+`"keyword"` or `"hybrid"` to compare them. Each result shows `vector_score` and
+`keyword_score`. `score` is the ranking score of the mode used, so only compare it within
+one mode. Errors always have the shape
 `{"error": {"code": "...", "message": "..."}}`.
 
 The API is published on `127.0.0.1` only. Set `EASYRAG_PORT` in `.env` to change the host port.

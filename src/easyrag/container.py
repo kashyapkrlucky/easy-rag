@@ -25,9 +25,12 @@ from easyrag.llm.ollama import OllamaLLMProvider
 from easyrag.rag.prompt import PromptBuilder
 from easyrag.rag.service import RagService
 from easyrag.retrieval.base import Retriever
+from easyrag.retrieval.hybrid import HybridRetriever
+from easyrag.retrieval.keyword import KeywordRetriever
 from easyrag.retrieval.vector import VectorRetriever
 from easyrag.storage.database import create_engine, ping
 from easyrag.storage.index_store import PostgresIndexStore
+from easyrag.storage.keyword_store import PostgresKeywordStore
 from easyrag.storage.migrate import SchemaStatus, schema_status
 from easyrag.storage.vector_store import PostgresVectorStore
 
@@ -46,7 +49,9 @@ class AppContainer:
     indexing: IndexingCoordinator
     watcher: DocsWatcher
     index_store: PostgresIndexStore
+    # The configured retriever, and every mode by name (for per-request overrides).
     retriever: Retriever
+    retrievers: Mapping[str, Retriever]
     rag: RagService
     # Reported by /health/ready, in this order.
     readiness_checks: Mapping[str, ReadinessCheck]
@@ -97,12 +102,23 @@ def build_container(settings: Settings) -> AppContainer:
         store=index_store,
     )
 
-    retriever = VectorRetriever(
+    vector = VectorRetriever(
         embeddings=embeddings,
         search=PostgresVectorStore(engine),
         default_top_k=settings.retrieval_top_k,
         default_min_score=settings.retrieval_min_score,
     )
+    keyword = KeywordRetriever(
+        search=PostgresKeywordStore(engine), default_top_k=settings.retrieval_top_k
+    )
+    retrievers: dict[str, Retriever] = {
+        "vector": vector,
+        "keyword": keyword,
+        "hybrid": HybridRetriever(
+            vector=vector, keyword=keyword, default_top_k=settings.retrieval_top_k
+        ),
+    }
+    retriever = retrievers[settings.retrieval_mode]
 
     rag = RagService(
         retriever=retriever,
@@ -150,6 +166,7 @@ def build_container(settings: Settings) -> AppContainer:
         ),
         index_store=index_store,
         retriever=retriever,
+        retrievers=retrievers,
         rag=rag,
         readiness_checks={
             "database": database,

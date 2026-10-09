@@ -15,10 +15,18 @@ from easyrag.storage.index_store import IndexedDocument
 Query = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2000)]
 
 
+RetrievalMode = Literal["vector", "keyword", "hybrid"]
+
+
 class RetrieveRequest(BaseModel):
     query: Query
     top_k: int | None = Field(default=None, ge=1, le=MAX_TOP_K)
-    min_score: float | None = Field(default=None, ge=-1.0, le=1.0)
+    min_score: float | None = Field(
+        default=None, ge=-1.0, le=1.0, description="Cosine threshold for vector results"
+    )
+    mode: RetrievalMode | None = Field(
+        default=None, description="Override EASYRAG_RETRIEVAL_MODE for this request"
+    )
 
 
 class RetrievedChunkResponse(BaseModel):
@@ -29,7 +37,12 @@ class RetrievedChunkResponse(BaseModel):
     heading_path: list[str]
     anchor: str = Field(description="URL fragment of the section ('' for a preamble)")
     lines: tuple[int, int] = Field(description="1-based, inclusive line range in the document")
-    score: float = Field(description="Cosine similarity; higher is more similar")
+    score: float = Field(
+        description="Ranking score of the mode used (cosine / keyword share / RRF); "
+        "compare only within one mode"
+    )
+    vector_score: float | None = Field(description="Cosine similarity, if found by vector")
+    keyword_score: float | None = Field(description="Matched IDF share, if found by keyword")
     content: str
 
     @classmethod
@@ -43,12 +56,15 @@ class RetrievedChunkResponse(BaseModel):
             anchor=chunk.section_anchor,
             lines=(chunk.start_line, chunk.end_line),
             score=round(chunk.score, 6),
+            vector_score=None if chunk.vector_score is None else round(chunk.vector_score, 6),
+            keyword_score=None if chunk.keyword_score is None else round(chunk.keyword_score, 6),
             content=chunk.content,
         )
 
 
 class RetrieveResponse(BaseModel):
     query: str
+    mode: RetrievalMode
     embedding_model: str
     results: list[RetrievedChunkResponse]
 
@@ -65,7 +81,7 @@ class SourceResponse(BaseModel):
     heading_path: list[str]
     anchor: str = Field(description="URL fragment of the section ('' for a preamble)")
     lines: tuple[int, int] = Field(description="1-based, inclusive line range in the document")
-    score: float = Field(description="Retrieval cosine similarity")
+    score: float = Field(description="Retrieval ranking score (see /retrieve)")
     chunk_id: str
 
     @classmethod

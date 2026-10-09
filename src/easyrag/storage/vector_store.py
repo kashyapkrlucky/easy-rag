@@ -92,6 +92,7 @@ class PostgresVectorStore:
                     start_line=row.start_line,
                     end_line=row.end_line,
                     score=float(row.score),
+                    vector_score=float(row.score),
                 )
                 for row in rows
             ]

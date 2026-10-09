@@ -169,6 +169,8 @@ Decision references (D1–D24) point to [ARCHITECTURE.md §9](ARCHITECTURE.md#9-
 ### Phase 17 — Hybrid retrieval
 - **Objective:** a generated `tsvector` column + GIN index (migration), `KeywordRetriever`, and `HybridRetriever` with Reciprocal Rank Fusion; the retrieval mode is configurable. (D15)
 - **Tests:** an exact-identifier query (e.g. an env var name) is found by keyword search where vector search misses it; RRF ordering is deterministic.
+- **Done (D32):** migration 0004 (`search_vector` with simple + english lexemes, GIN, backfill); `stopwords.py` shared with attribution; `retrieval/{keyword,hybrid}.py`; `storage/keyword_store.py` (BM25-IDF coverage scoring); `EASYRAG_RETRIEVAL_MODE` and per-request `mode`; `vector_score`/`keyword_score` on results. Tests: term extraction; RRF arithmetic, tie-breaking, candidate widening, `min_score` scope; real-Postgres keyword search (identifier phrases, **IDF beats frequency**, mutation-checked; natural questions aren't AND queries; GIN index used; backfill on migration); hybrid over real stores. Live: 12-query comparison chose hybrid (MRR 0.86, hit@3 1.00).
+- **Status:** ✅ done
 - **Commit:** `feat: add hybrid vector and keyword retrieval`
 
 ### Phase 18 — Reranking
@@ -179,7 +181,7 @@ Decision references (D1–D24) point to [ARCHITECTURE.md §9](ARCHITECTURE.md#9-
 ### Phase 19 — Evaluation
 - **Objective:** a dataset format (question, expected document/section, answerable flag, key facts), metrics (recall@k, MRR, citation precision/recall, refusal accuracy, latency p50/p95) and an `easyrag eval` CLI writing a JSON report; calibrate the default similarity threshold.
 - **Files:** `evaluation/`, `eval/datasets/`
-- **Must include (from Phases 13–14):** faithfulness beyond lexical support; injection cases; outcome and attribution rates (explicit vs inferred); calibration of the attribution thresholds (D30) alongside the similarity threshold; a corpus free of evaluation notes.
+- **Must include (from Phases 13–17):** re-check the default retrieval mode and RRF on a clean corpus (D32); faithfulness beyond lexical support; injection cases; outcome and attribution rates (explicit vs inferred); calibration of the attribution thresholds (D30) alongside the similarity threshold; a corpus free of evaluation notes.
 - **Commit:** `feat: add RAG evaluation framework`
 
 ### Phase 20 — Structured logging and metrics

@@ -44,7 +44,11 @@ class StubRetriever:
 
 def client_with(settings: Settings, retriever: StubRetriever) -> TestClient:
     def factory(settings: Settings) -> AppContainer:
-        return replace(build_container(settings), retriever=retriever)
+        return replace(
+            build_container(settings),
+            retriever=retriever,
+            retrievers={"vector": retriever, "keyword": retriever, "hybrid": retriever},
+        )
 
     # raise_server_exceptions=False: assert on the 500 response instead of re-raising.
     return TestClient(
@@ -62,6 +66,7 @@ def test_returns_results_in_api_shape(make_settings: SettingsFactory) -> None:
     body = response.json()
     assert body["query"] == "How do I deploy?"
     assert body["embedding_model"].startswith("ollama/nomic-embed-text:v1.5")
+    assert body["mode"] == "hybrid"  # the default
     assert body["results"] == [
         {
             "chunk_id": "c" * 32,
@@ -72,6 +77,8 @@ def test_returns_results_in_api_shape(make_settings: SettingsFactory) -> None:
             "anchor": "docker-deployment",
             "lines": [12, 14],
             "score": 0.831235,
+            "vector_score": None,
+            "keyword_score": None,
             "content": "Run docker compose up.",
         }
     ]
@@ -159,7 +166,11 @@ def test_database_errors_do_not_leak_connection_details(make_settings: SettingsF
         retriever = VectorRetriever(
             embeddings=FakeEmbeddingProvider(), search=PostgresVectorStore(container.engine)
         )
-        return replace(container, retriever=retriever)
+        return replace(
+            container,
+            retriever=retriever,
+            retrievers={"vector": retriever, "keyword": retriever, "hybrid": retriever},
+        )
 
     app = create_app(make_settings(), container_factory=factory)
     with TestClient(app, raise_server_exceptions=False) as client:
@@ -180,3 +191,32 @@ def test_unexpected_errors_return_a_generic_500(make_settings: SettingsFactory) 
     assert response.json() == {
         "error": {"code": "internal_error", "message": "An unexpected error occurred"}
     }
+
+
+def test_mode_can_be_overridden_per_request(make_settings: SettingsFactory) -> None:
+    calls: list[str] = []
+
+    class Named(StubRetriever):
+        def __init__(self, name: str) -> None:
+            super().__init__([])
+            self.name = name
+
+        async def retrieve(
+            self, query: str, *, top_k: int | None = None, min_score: float | None = None
+        ) -> list[RetrievedChunk]:
+            calls.append(self.name)
+            return []
+
+    def factory(settings: Settings) -> AppContainer:
+        modes = {name: Named(name) for name in ("vector", "keyword", "hybrid")}
+        return replace(build_container(settings), retriever=modes["hybrid"], retrievers=modes)
+
+    with TestClient(create_app(make_settings(), container_factory=factory)) as client:
+        modes = [
+            client.post("/api/v1/retrieve", json={"query": "q", "mode": mode}).json()["mode"]
+            for mode in ("keyword", "vector", "hybrid")
+        ]
+        invalid = client.post("/api/v1/retrieve", json={"query": "q", "mode": "magic"})
+
+    assert modes == calls == ["keyword", "vector", "hybrid"]
+    assert invalid.status_code == 422

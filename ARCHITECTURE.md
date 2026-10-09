@@ -174,12 +174,13 @@ easy-rag/
 │   │   ├── migrate.py                (P4)  upgrade_to_head, schema_status
 │   │   ├── migrations/               (P4)  Alembic env + versions, shipped in the package
 │   │   ├── index_store.py            (P9)  PostgresIndexStore (write side, vector index, guard)
-│   │   └── vector_store.py           (P10) PostgresVectorStore: k-NN search (read side)
+│   │   ├── vector_store.py           (P10) PostgresVectorStore: k-NN search (read side)
+│   │   └── keyword_store.py          (P17) full-text search with IDF-weighted coverage
 │   ├── retrieval/
 │   │   ├── base.py                   (P10) Retriever + VectorSearch Protocols
 │   │   ├── vector.py                 (P10)
-│   │   ├── keyword.py                (P17)
-│   │   ├── hybrid.py                 (P17) reciprocal rank fusion
+│   │   ├── keyword.py                (P17) term extraction (identifiers as phrases)
+│   │   ├── hybrid.py                 (P17) reciprocal rank fusion (k = 60)
 │   │   └── rerank.py                 (P18)
 │   ├── llm/
 │   │   ├── base.py                   (P11) LLMProvider Protocol
@@ -422,7 +423,7 @@ chunks
   token_estimate        INTEGER NOT NULL          -- estimate for embed_text (header + content)
   embedding             VECTOR NOT NULL           -- (P9) dimension-agnostic; see D11
   embedding_model       TEXT NOT NULL             -- (P9) EmbeddingProvider.model_id
-  search_vector         TSVECTOR GENERATED        -- (P17)
+  search_vector         TSVECTOR                  -- (P17) simple + english lexemes; written by the store
   UNIQUE (document_id, ordinal)
   INDEX hnsw ((embedding::vector(d)) vector_cosine_ops)  -- (P9) app-managed, see D11
   INDEX (embedding_input_hash, embedding_model)   -- (P15) embedding reuse lookup
@@ -908,6 +909,46 @@ numbers must match.
   must keep evaluation notes out of the corpus they evaluate.
 - **The prompt fingerprint now covers the worked examples.** The earlier fingerprint
   missed them; a mutation test showed the guard catches example edits now.
+
+**D32 — Hybrid retrieval with IDF-weighted keyword search (Phase 17).** This implements D15.
+- **Index:** `chunks.search_vector` (GIN) holds **two forms** of the title, heading path and
+  content: `simple` lexemes (no stemming, so `EASYRAG_EMBEDDING_MODEL`, `v1.5` and
+  `nomic-embed-text` survive) and `english` stemmed lexemes (so `deploy` matches
+  "deployment"). It's written by the index store in the chunk's transaction, not as a
+  generated column, because `array_to_string()` is only STABLE. Migration 0004 backfills it.
+- **Query terms** (`retrieval/keyword.py`): identifiers are kept whole and searched as
+  phrases (`phraseto_tsquery('simple', …)`); other words drop stopwords and are searched
+  stemmed (`plainto_tsquery('english', …)`). Terms are bound parameters, so there's no
+  tsquery injection.
+- **Scoring** (`storage/keyword_store.py`): PostgreSQL's `ts_rank` has no IDF, and
+  `websearch_to_tsquery` ANDs every word of a natural question, so it would match nothing.
+  Instead, each term gets a BM25 IDF weight from per-corpus document frequencies, and
+  `score = matched weight / total weight` ∈ [0, 1]. A mutation test confirms ranking by
+  rarity: with constant weights, a chunk repeating "model" beats the one containing the
+  rare `E1042`.
+- **Fusion:** Reciprocal Rank Fusion with k = 60 over up to max(4k, 20) candidates per side,
+  run concurrently, with ties broken by chunk ID. RRF uses ranks only, because cosine
+  similarity and keyword coverage aren't comparable. `score` is the producing mode's
+  score; `vector_score` and `keyword_score` are always exposed. `min_score` (cosine)
+  applies to the vector side.
+- **Mode:** `EASYRAG_RETRIEVAL_MODE` (default **hybrid**). `/api/v1/retrieve` accepts a
+  per-request `mode` for comparison and evaluation.
+- **Measured** (12 hand-labelled queries, real `nomic-embed-text`; small and author-made,
+  so indicative only):
+
+  | Mode | hit@1 | hit@3 | MRR@5 | Notes |
+  |---|---|---|---|---|
+  | vector | 0.67 | **1.00** | 0.83 | misses exact identifiers at rank 1 |
+  | keyword | 0.75 | 0.83 | 0.79 | best on identifiers; weak on paraphrase |
+  | hybrid | 0.75 | **1.00** | **0.86** | identifier hit@1 0.67 vs vector 0.50 |
+
+  The first keyword run had no stemming and missed "deploy" vs "deployment"; adding the
+  stemmed lexemes fixed it. Hybrid is the default: it never loses the top-3 evidence that
+  vector finds, and adds exact-term recall.
+- **Corpus contamination, again:** README and ARCHITECTURE contain the literal question
+  "How do I deploy the application with Docker?" as API examples, so lexical search
+  rightly ranks those above the real deployment guide. Phase 19 must evaluate on a corpus
+  free of such text, and re-check the default mode there.
 ---
 
 ## 10. API surface (target)
@@ -916,7 +957,7 @@ numbers must match.
 |---|---|---|
 | `GET /health/live` | 1 | Liveness |
 | `GET /health/ready` | 3 (extended 8, 12) | Readiness: DB, migrations, model provider |
-| `POST /api/v1/retrieve` | 10 | Retrieval only (debugging, evaluation) |
+| `POST /api/v1/retrieve` | 10, 17 ✅ | Retrieval only (debugging, evaluation); optional `mode` (vector / keyword / hybrid) |
 | `POST /api/v1/chat` | 13–14 ✅ | Question → `{answer, status, grounded, truncated, sources}`; `[k]` in the answer ⇔ `sources[k-1]` |
 | `GET /api/v1/documents` | 15 ✅ | Indexed documents: path, title, hash, size, chunk count, indexed_at |
 | `GET /api/v1/index/status` | 15–16 ✅ | State, pending follow-up, watcher state, last report, last error, startup attempts, counts |
@@ -962,6 +1003,7 @@ Chat contract (target):
 | `EASYRAG_EMBEDDING_MODEL` / `_DIMENSION` | `nomic-embed-text:v1.5` / `768` | 8 |
 | `EASYRAG_EMBEDDING_BATCH_SIZE` | `32` | 8 |
 | `EASYRAG_EMBEDDING_QUERY_PREFIX` / `_DOCUMENT_PREFIX` | `"search_query: "` / `"search_document: "` | 8 |
+| `EASYRAG_RETRIEVAL_MODE` | `hybrid` (`vector` / `keyword`) | 17 |
 | `EASYRAG_RETRIEVAL_TOP_K` | `5` (1–50; requests may override) | 10 |
 | `EASYRAG_RETRIEVAL_MIN_SCORE` | unset (off; requests may override) | 10 / 14 |
 | `EASYRAG_LLM_MODEL` / `_CONTEXT_WINDOW` | `qwen2.5:1.5b-instruct-q4_K_M` / `8192` | 12 |

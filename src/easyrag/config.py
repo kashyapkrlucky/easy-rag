@@ -58,6 +58,9 @@ class Settings(BaseSettings):
     watch_resync_seconds: float = Field(default=300.0, ge=0, le=86400)
 
     # --- Retrieval ---------------------------------------------------------------------
+    # vector: dense similarity; keyword: full-text with IDF weighting; hybrid: both, fused
+    # with Reciprocal Rank Fusion (ARCHITECTURE D32).
+    retrieval_mode: Literal["vector", "keyword", "hybrid"] = "hybrid"
     retrieval_top_k: int = Field(default=5, ge=1, le=50)
     # Minimum cosine similarity for a chunk to be returned. Off by default: useful values
     # are model-specific and must be calibrated on your documents (ARCHITECTURE D12).

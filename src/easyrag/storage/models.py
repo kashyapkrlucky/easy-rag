@@ -28,7 +28,7 @@ from sqlalchemy import (
     func,
     text,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 # Created and dropped by PostgresIndexStore, not by migrations: their definition depends on
@@ -88,6 +88,8 @@ class Chunk(Base):
         UniqueConstraint("document_id", "ordinal"),
         # Embedding reuse lookup (incremental indexing).
         Index(None, "embedding_input_hash", "embedding_model"),
+        # Keyword search.
+        Index(None, "search_vector", postgresql_using="gin"),
         CheckConstraint("ordinal >= 0", name="ordinal_non_negative"),
         CheckConstraint("start_line >= 1 AND start_line <= end_line", name="line_range_valid"),
         CheckConstraint("token_estimate >= 0", name="token_estimate_non_negative"),
@@ -110,6 +112,11 @@ class Chunk(Base):
     # NULL for rows written before revision 0003 (never reused).
     embedding_input_hash: Mapped[str | None] = mapped_column(String(64))
     embedding: Mapped[list[float]] = mapped_column(Vector())
+    # Keyword search: 'simple' lexemes (identifiers survive; title/headings weight A,
+    # content B) plus 'english' stemmed lexemes (weight D). Written by the index store in
+    # the same transaction as the chunk; not a generated column because array_to_string()
+    # is not IMMUTABLE.
+    search_vector: Mapped[str | None] = mapped_column(TSVECTOR)
     # EmbeddingProvider.model_id that produced ``embedding``.
     embedding_model: Mapped[str] = mapped_column(Text)
 

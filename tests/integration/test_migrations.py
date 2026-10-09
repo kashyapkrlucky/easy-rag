@@ -42,7 +42,7 @@ def test_upgrade_creates_schema_and_extension(migrated_database_url: str) -> Non
         heads = set(MigrationContext.configure(connection).get_current_heads())
     engine.dispose()
 
-    assert heads == expected_heads() == {"0003"}
+    assert heads == expected_heads() == {"0004"}
 
 
 def test_downgrade_and_upgrade_round_trip(migrated_database_url: str) -> None:

@@ -43,6 +43,25 @@ class IndexedDocument:
     indexed_at: datetime
 
 
+# Same expression as migration 0004's backfill; keep them in sync.
+_SET_SEARCH_VECTOR = text(
+    """
+    UPDATE chunks AS c
+    SET search_vector =
+        setweight(
+            to_tsvector('simple', d.title || ' ' || array_to_string(c.heading_path, ' ')), 'A'
+        )
+        || setweight(to_tsvector('simple', c.content), 'B')
+        || setweight(
+            to_tsvector('english', d.title || ' ' || array_to_string(c.heading_path, ' ')
+                        || ' ' || c.content),
+            'D'
+        )
+    FROM documents AS d
+    WHERE d.id = c.document_id AND c.document_id = :document_id
+    """
+)
+
 _documents = cast(Table, Document.__table__)
 _chunks = cast(Table, Chunk.__table__)
 _index_state = cast(Table, IndexState.__table__)
@@ -217,6 +236,7 @@ class PostgresIndexStore:
                         for chunk, vector in zip(document.chunks, document.embeddings, strict=True)
                     ],
                 )
+                await connection.execute(_SET_SEARCH_VECTOR, {"document_id": document_id})
 
     async def reset(self) -> None:
         async with self._engine.begin() as connection:

@@ -32,4 +32,4 @@ def test_constraint_names_follow_naming_convention() -> None:
 
 def test_migration_history_has_a_single_head() -> None:
     # Multiple heads would mean divergent migration branches that need merging.
-    assert expected_heads() == {"0003"}
+    assert expected_heads() == {"0004"}
