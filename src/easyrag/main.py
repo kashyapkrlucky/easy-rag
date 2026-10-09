@@ -12,24 +12,28 @@ from fastapi import FastAPI
 from easyrag import __version__
 from easyrag.api.routes import health
 from easyrag.config import Settings
+from easyrag.container import build_container
 from easyrag.observability.logging import configure_logging
 
 logger = logging.getLogger(__name__)
 
 
-@asynccontextmanager
-async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
-    logger.info("EasyRAG %s starting", __version__)
-    yield
-    logger.info("EasyRAG shutting down")
-
-
 def create_app(settings: Settings | None = None) -> FastAPI:
     """Build the application. ``settings`` defaults to values from the environment."""
-    settings = settings if settings is not None else Settings()
-    configure_logging(settings.log_level)
+    resolved = settings if settings is not None else Settings()
+    configure_logging(resolved.log_level)
 
-    app = FastAPI(title="EasyRAG", version=__version__, lifespan=_lifespan)
-    app.state.settings = settings
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        logger.info("EasyRAG %s starting", __version__)
+        container = build_container(resolved)
+        app.state.container = container
+        try:
+            yield
+        finally:
+            await container.aclose()
+            logger.info("EasyRAG shut down")
+
+    app = FastAPI(title="EasyRAG", version=__version__, lifespan=lifespan)
     app.include_router(health.router)
     return app

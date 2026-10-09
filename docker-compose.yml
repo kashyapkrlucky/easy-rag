@@ -7,9 +7,14 @@ services:
     env_file:
       - path: .env
         required: false
+    environment:
+      EASYRAG_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-easyrag}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env (see .env.example)}@db:5432/${POSTGRES_DB:-easyrag}
     ports:
       # Published on localhost only: the API has no authentication until it is added.
       - "127.0.0.1:${EASYRAG_PORT:-8000}:8000"
+    depends_on:
+      db:
+        condition: service_healthy
     restart: unless-stopped
     read_only: true
     tmpfs:
@@ -18,3 +23,24 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
+
+  db:
+    image: pgvector/pgvector:0.8.7-pg18-trixie
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-easyrag}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env (see .env.example)}
+      POSTGRES_DB: ${POSTGRES_DB:-easyrag}
+    volumes:
+      # PostgreSQL 18 images keep data in a version-specific subdirectory of this path.
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+    # Not published to the host. For development access use docker-compose.dev.yml.
+
+volumes:
+  pgdata:

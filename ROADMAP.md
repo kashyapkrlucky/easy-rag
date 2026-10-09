@@ -55,9 +55,10 @@ Decision references (D1–D24) point to [ARCHITECTURE.md §9](ARCHITECTURE.md#9-
 ### Phase 3 — PostgreSQL + pgvector
 - **Objective:** add a database service and app connectivity, with readiness reflecting DB health.
 - **Files:** `docker-compose.yml` (pgvector/pgvector image, volume, healthcheck), `storage/database.py`,
-  `container.py`, `api/dependencies.py`, `api/errors.py`, readiness in `routes/health.py`, integration test scaffold.
+  `docker-compose.dev.yml`, `container.py`, `api/dependencies.py`, readiness in `routes/health.py`, integration test scaffold.
 - **Tests:** unit test for readiness with a failing DB dependency → 503; integration test pings DB and confirms the `vector` extension is available.
-- **Not yet:** tables.
+- **Not yet:** tables; `CREATE EXTENSION` (Phase 4); `api/errors.py` (moved to Phase 8, with the first domain exceptions).
+- **Status:** ✅ done
 - **Commit:** `feat: add PostgreSQL vector database`
 
 ### Phase 4 — Schema and Alembic migrations
@@ -87,7 +88,7 @@ Decision references (D1–D24) point to [ARCHITECTURE.md §9](ARCHITECTURE.md#9-
 
 ### Phase 8 — Ollama embeddings
 - **Objective:** an httpx-based Ollama adapter (batching, timeouts, retries, query/document prefixes); an Ollama compose service with a model-pull step; readiness checks the model. (D3, D19)
-- **Files:** `embeddings/ollama.py`, `docker-compose.yml`, `container.py`, README notes on host-Ollama for macOS.
+- **Files:** `embeddings/ollama.py`, `api/errors.py`, `docker-compose.yml`, `container.py`, README notes on host-Ollama for macOS.
 - **Tests:** `respx`-mocked happy path, batching, errors and timeouts; the conformance suite; opt-in e2e against real Ollama.
 - **Decides:** the default embedding model + dimension.
 - **Commit:** `feat: add Ollama embedding provider`

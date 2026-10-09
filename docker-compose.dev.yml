@@ -1,0 +1,10 @@
+# Development overrides: publishes PostgreSQL on localhost for integration tests and psql.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d db
+#
+# Not used by end users.
+
+services:
+  db:
+    ports:
+      - "127.0.0.1:${EASYRAG_DB_PORT:-5432}:5432"

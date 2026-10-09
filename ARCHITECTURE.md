@@ -41,7 +41,7 @@ put Markdown in ./docs  →  docker compose up  →  POST /api/v1/chat  →  gro
   ./docs  ──────┼──► (bind mount, read-only)                                                │
   (*.md)        │          │                                                                │
                 │   ┌──────▼──────────────────────┐         ┌───────────────────────────┐   │
-  HTTP client ──┼──►│  easyrag (FastAPI + indexer)│────────►│ PostgreSQL 16 + pgvector  │   │
+  HTTP client ──┼──►│  easyrag (FastAPI + indexer)│────────►│ PostgreSQL 18 + pgvector  │   │
   / Web UI      │   │  single Python process      │  SQL    │ documents, chunks,        │   │
                 │   └──────────────┬──────────────┘         │ embeddings, index state   │   │
                 │                  │ HTTP                    └───────────────────────────┘   │
@@ -150,7 +150,7 @@ easy-rag/
 │   │   └── answers.py                (P13) Answer, Citation, RagTrace
 │   ├── api/
 │   │   ├── dependencies.py           (P3)
-│   │   ├── errors.py                 (P3)  domain exception → HTTP mapping
+│   │   ├── errors.py                 (P8)  domain exception → HTTP mapping
 │   │   ├── schemas.py                (P10)
 │   │   └── routes/
 │   │       ├── health.py             (P1, readiness in P3)
@@ -470,6 +470,11 @@ existing `LLMProvider`. We will not ship a multi-gigabyte PyTorch image.
 reachable and migrated, model provider reachable, configured models present. Indexing
 progress is reported separately (`/api/v1/index/status`) rather than making the app
 "not ready" for minutes on a large first index.
+Readiness returns `{"status": "ready"|"not_ready", "checks": {"<name>": "ok"|"unavailable"}}`
+with 200 or 503. Every check has a timeout (`EASYRAG_HEALTH_CHECK_TIMEOUT_SECONDS`), and
+failures are logged by exception type only (messages can contain connection details). The
+app starts even when dependencies are down, so liveness stays green and the container
+isn't restart-looped while Postgres boots.
 
 **D19 — Ollama placement is configurable.** Compose ships an `ollama` service, but
 `EASYRAG_OLLAMA_BASE_URL` can point at the host (`http://host.docker.internal:11434`).
@@ -511,6 +516,13 @@ no compilers, no tests). The container runs as UID 10001 with a read-only root f
 all capabilities dropped and `no-new-privileges`. uvicorn is PID 1 (exec-form `CMD`), so
 SIGTERM shuts down gracefully. Compose publishes the API on `127.0.0.1` only until
 authentication exists (Phase 22). Later phases needing writable paths add explicit volumes.
+
+**D26 — Database runtime and credentials (Phase 3).** `pgvector/pgvector:0.8.7-pg18-trixie`
+(PostgreSQL 18, pinned pgvector). `POSTGRES_PASSWORD` has no default: Compose refuses to start
+without it, and builds `EASYRAG_DATABASE_URL` from the `POSTGRES_*` variables. The app treats
+the URL as a `SecretStr`. The database is never published by the main compose file;
+`docker-compose.dev.yml` publishes it on `127.0.0.1` for integration tests and `psql`.
+Integration tests run only when `EASYRAG_TEST_DATABASE_URL` is set.
 
 ---
 

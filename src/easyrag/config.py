@@ -7,7 +7,7 @@ the environment; everything else receives a ``Settings`` instance.
 
 from typing import Annotated, Literal
 
-from pydantic import BeforeValidator
+from pydantic import BeforeValidator, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
@@ -29,3 +29,10 @@ class Settings(BaseSettings):
     )
 
     log_level: Annotated[LogLevel, BeforeValidator(_upper)] = "INFO"
+
+    # SQLAlchemy URL, e.g. postgresql+psycopg://user:password@host:5432/dbname
+    # Secret because it carries the password; never log it.
+    database_url: SecretStr
+
+    # Upper bound for each dependency check performed by /health/ready.
+    health_check_timeout_seconds: float = Field(default=2.0, gt=0, le=30)

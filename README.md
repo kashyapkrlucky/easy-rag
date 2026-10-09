@@ -4,7 +4,7 @@ A self-hosted, local-first Retrieval-Augmented Generation system for your Markdo
 documents. It runs entirely on your machine — Python, FastAPI, PostgreSQL + pgvector and
 Ollama — with no external SaaS.
 
-> **Status: Phase 2 — Docker runtime.** Only a liveness endpoint exists so far.
+> **Status: Phase 3 — PostgreSQL + pgvector.** Health endpoints only; no RAG features yet.
 > See [ROADMAP.md](ROADMAP.md) for progress.
 
 ## What it will do
@@ -47,12 +47,15 @@ answer, EasyRAG says it doesn't know instead of guessing.
 ## Running with Docker
 
 ```bash
+cp .env.example .env                                # then set POSTGRES_PASSWORD in .env
 docker compose up --build -d
 curl http://localhost:8000/health/live              # {"status":"ok"}
-docker compose down
+curl http://localhost:8000/health/ready             # {"status":"ready","checks":{"database":"ok"}}
+docker compose down                                 # add -v to also delete the database volume
 ```
 
 The API is published on `127.0.0.1` only. Set `EASYRAG_PORT` in `.env` to change the host port.
+PostgreSQL is not published to the host.
 
 ## Development
 
@@ -65,13 +68,26 @@ uv run uvicorn --factory easyrag.main:create_app --reload
 curl http://localhost:8000/health/live              # {"status":"ok"}
 ```
 
+The app needs a database even outside Docker. Start one and point the app at it:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d db
+export EASYRAG_DATABASE_URL=postgresql+psycopg://easyrag:<password>@127.0.0.1:5432/easyrag
+```
+
 Checks (all must pass before committing):
 
 ```bash
 uv run ruff format --check .
 uv run ruff check .
 uv run mypy
-uv run pytest
+uv run pytest                                       # unit tests; integration tests skip
+```
+
+Integration tests run against the development database when `EASYRAG_TEST_DATABASE_URL` is set:
+
+```bash
+EASYRAG_TEST_DATABASE_URL=postgresql+psycopg://easyrag:<password>@127.0.0.1:5432/easyrag uv run pytest
 ```
 
 Configuration is read from `EASYRAG_*` environment variables. See [.env.example](.env.example).
