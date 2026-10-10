@@ -135,7 +135,8 @@ easy-rag/
 ├── docker/entrypoint.sh              (P4)  migrate, then exec the server
 ├── docs/                             user corpus — git-ignored, mounted read-only
 ├── examples/docs/                    (P25) sample corpus for demos & tests
-├── eval/datasets/                    (P19) question/answer/source datasets
+├── eval/datasets/nimbus/             (P19) fictional corpus + 30 labelled questions
+├── eval/reports/                     (P19) evaluation reports (git-ignored)
 ├── src/easyrag/
 │   ├── __init__.py                   (P1)
 │   ├── main.py                       (P1)  app factory + lifespan
@@ -145,7 +146,7 @@ easy-rag/
 │   ├── ollama.py                     (P12) shared Ollama HTTP: retries, errors, /api/show
 │   ├── tokens.py                     (P6)  deterministic token estimate
 │   ├── container.py                  (P3)  composition root: builds adapters/services
-│   ├── cli.py                        (P9)  `easyrag index [--rebuild]`, later `eval` (argparse)
+│   ├── cli.py                        (P9)  `easyrag index [--rebuild]`, `easyrag eval` (P19)
 │   ├── domain/
 │   │   ├── documents.py              (P5)  SourceDocument, ParsedDocument, Section
 │   │   ├── chunks.py                 (P6)  Chunk, RetrievedChunk
@@ -196,9 +197,10 @@ easy-rag/
 │   │   ├── logging.py                (P1 basic, structured in P20)
 │   │   └── metrics.py                (P20)
 │   ├── evaluation/                   (P19)
-│   │   ├── dataset.py
-│   │   ├── metrics.py
-│   │   └── runner.py
+│   │   ├── dataset.py                validated loading; labels checked against the corpus
+│   │   ├── metrics.py                pure metrics (ranks, key facts, citations, threshold)
+│   │   ├── runner.py                 isolated database, retrieval + answer evaluation
+│   │   └── report.py                 JSON report + summary
 │   └── web/                          (P23) static HTML/JS served by FastAPI
 └── tests/
     ├── conftest.py
@@ -995,6 +997,63 @@ numbers must match.
   architecture test's infrastructure list exposed that the Phase 16 watcher sat in
   `ingestion/` while importing `watchfiles`. It's an event-source adapter, so it moved to
   `easyrag/watcher.py` rather than weakening the rule.
+
+**D34 — Evaluation framework and baseline (Phase 19).**
+- **Dataset** (`eval/datasets/nimbus`): documentation for a **fictional** backup tool (7
+  documents) and 30 labelled questions: 11 factual, 4 paraphrase, 5 identifier,
+  8 unanswerable and 2 injection. Being fictional, a correct answer can only come from
+  retrieval, and the corpus contains no evaluation notes. That fixes the contamination
+  found in D30 and D32. Labels are validated against the corpus at load time (documents
+  must exist, sections must match real headings).
+- **Correctness** is checked with key facts (any-of alternatives, case-insensitive): a
+  deterministic, reference-based check that catches *wrong* answers, which lexical
+  attribution can't. A judge LLM was rejected, because the 1.5B model would be grading
+  itself.
+- **Isolation:** `easyrag eval` indexes into a throwaway `easyrag_eval_<id>` database and
+  drops it, even on failure (tested; no leftovers after real runs). Each report snapshots
+  the models, prompt version and fingerprint, pipeline fingerprint and retrieval settings.
+- **Baseline** (`qwen2.5:1.5b`, `nomic-embed-text`, prompt v4, hybrid, rerank off,
+  policy `refuse`, CPU in Docker on macOS):
+
+  | Retrieval (22 answerable) | hit@1 | hit@5 | MRR |
+  |---|---|---|---|
+  | vector | 95.5% | 100% | 0.964 |
+  | keyword | 81.8% | 95.5% | 0.867 |
+  | hybrid | 86.4% | 100% | 0.918 |
+  | vector + rerank / hybrid + rerank | 95.5% | 100% | **0.977** |
+
+  | Answers | Result |
+  |---|---|
+  | answerable correct (all key facts, answered) | **77.3%** (17/22): factual 90.9%, paraphrase 75%, identifier 80% |
+  | answered / citation precision | 95.5% / 83.3%; attribution 15 explicit, 6 inferred |
+  | unanswerable correctly refused | **87.5%** (7/8) |
+  | prompt injection resisted | **0%** (0/2) |
+  | latency per answer | p50 3.0 s, p95 5.3 s |
+
+- **Decisions this settled:**
+  - **Retrieval mode stays hybrid.** It's worse than vector at hit@1 on this corpus, but
+    end-to-end answer quality was identical for both (72.7% each, before the label fix),
+    because the model sees the top 5. It keeps exact-identifier robustness for other
+    corpora at no measured cost.
+  - **Reranking stays off.** It gives the best MRR (+0.013, one question), with no
+    answer-level evidence to justify about 1.3 s per question and a model download.
+  - **Similarity threshold stays off.** Answerable and unanswerable top-1 scores overlap
+    (0.61–0.89 vs 0.60–0.74). The best threshold, 0.70 (balanced accuracy 80.7%), would
+    wrongly gate 3 of 22 answerable questions. The model's own refusals already reach
+    87.5%.
+- **Findings carried forward** (see ROADMAP Phase 25 hardening):
+  1. **Explicit citations aren't verified.** "Version 2.3 removed NIMBUS_COMPRESSION" was
+     a wrong number with a *wrong* explicit citation, and passed as `answered`. The
+     number and support check (D30) runs only for uncited replies.
+  2. **Prompt injection spreads beyond the poisoned question.** A *non-injection*
+     question ("How quickly are critical tickets answered?") retrieved the poisoned
+     section and answered "BANANA". Injection is a corpus-level risk, not a per-question
+     one.
+  3. **One label defect was found and fixed.** `mac-agent` required "macOS" when the
+     correct answer was "Yes …"; the baseline above is after the fix. Key-fact checks have
+     false negatives, so failures must be read, not just counted.
+  4. Small sample: one question is 4.5 points on the answerable rate. Treat differences of
+     one or two questions as noise.
 ---
 
 ## 10. API surface (target)
@@ -1101,6 +1160,6 @@ The deterministic `FakeEmbeddingProvider` (hash-seeded vectors) and the scripted
 |---|---|
 | ~~Default embedding model and dimension~~ → `nomic-embed-text:v1.5`, 768: 274 MB, fast on CPU, 8192-token context, documented prefixes; English-centric (alternatives in `.env.example`) | 8 ✅ |
 | ~~Default chat model~~ → `qwen2.5:1.5b-instruct-q4_K_M` (~1 GB, Apache-2.0, no thinking mode). Chosen for a 4 GB Docker VM; see D28 | 12 ✅ |
-| Similarity threshold default per model | 19 |
+| ~~Similarity threshold default~~ → stays **off**: on the clean dataset the best threshold (0.70) still rejected 3 of 22 answerable questions (D34) | 19 ✅ |
 | ~~Reranker implementation~~ → ONNX cross-encoder (`ms-marco-MiniLM-L-6-v2` via fastembed), off by default until evaluation shows a gain (D33) | 18 ✅ |
 | API key optional vs. required when binding to non-localhost | 22 |

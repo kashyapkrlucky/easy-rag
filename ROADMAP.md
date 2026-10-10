@@ -184,6 +184,8 @@ Decision references (D1–D24) point to [ARCHITECTURE.md §9](ARCHITECTURE.md#9-
 - **Objective:** a dataset format (question, expected document/section, answerable flag, key facts), metrics (recall@k, MRR, citation precision/recall, refusal accuracy, latency p50/p95) and an `easyrag eval` CLI writing a JSON report; calibrate the default similarity threshold.
 - **Files:** `evaluation/`, `eval/datasets/`
 - **Must include (from Phases 13–18):** re-check the default retrieval mode, RRF and **reranking on/off** on a clean, non-saturated corpus (D32, D33); faithfulness beyond lexical support; injection cases; outcome and attribution rates (explicit vs inferred); calibration of the attribution thresholds (D30) alongside the similarity threshold; a corpus free of evaluation notes.
+- **Done (D34):** `evaluation/{dataset,metrics,runner,report}.py`; `easyrag eval DATASET [--retrieval-only] [--output] [--keep-database]`; the fictional `eval/datasets/nimbus` dataset (7 documents, 30 questions, labels validated against the corpus); isolated throwaway database per run. Tests: dataset validation (including the shipped dataset), metrics, answer scoring (correctness, injection leaks, refusals), error isolation; integration: isolated database created/migrated/dropped (also on failure), retrieval evaluation on the Nimbus corpus. Live baseline: answerable 77.3% correct, refusal 87.5%, injection 0%, p50 3.0 s. Hybrid default, rerank off and threshold off were all confirmed by data.
+- **Status:** ✅ done
 - **Commit:** `feat: add RAG evaluation framework`
 
 ### Phase 20 — Structured logging and metrics
@@ -208,6 +210,7 @@ Decision references (D1–D24) point to [ARCHITECTURE.md §9](ARCHITECTURE.md#9-
 
 ### Phase 25 — Documentation, examples, benchmarks, hardening
 - **Objective:** an `examples/docs` corpus, a benchmark report from the eval suite, a troubleshooting guide, and a security and failure-mode review.
+- **Carried from Phase 19 (D34):** verify *explicit* citations too (numbers and support), since a wrong number with a wrong citation passed; treat prompt injection as a corpus-level risk (it hijacked a non-injection question); re-run `easyrag eval` and compare with the D34 baseline after every change.
 - **Commit:** `docs: add examples, benchmarks and operations guide`
 
 ---

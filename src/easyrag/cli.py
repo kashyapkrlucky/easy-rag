@@ -3,6 +3,8 @@
     easyrag index            index the Markdown files in EASYRAG_DOCS_DIR
     easyrag index --rebuild  delete the existing index first (needed after changing
                              the embedding model)
+    easyrag eval DATASET     evaluate retrieval and answers on a labelled dataset, in an
+                             isolated database (never touches your index)
 
 Exit codes: 0 success, 1 some documents failed, 2 configuration problem,
 3 a dependency (embedding model) is unavailable.
@@ -12,6 +14,8 @@ import argparse
 import asyncio
 import sys
 from collections.abc import Sequence
+from datetime import UTC, datetime
+from pathlib import Path
 
 from easyrag.config import Settings
 from easyrag.container import build_container
@@ -35,11 +39,52 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="delete the existing index first (required after changing the embedding model)",
     )
+    evaluate = commands.add_parser("eval", help="evaluate retrieval and answer quality")
+    evaluate.add_argument("dataset", type=Path, help="dataset directory (corpus/ + questions.yaml)")
+    evaluate.add_argument(
+        "--retrieval-only", action="store_true", help="skip answer generation (fast)"
+    )
+    evaluate.add_argument("--output", type=Path, help="report path (default: eval/reports/...)")
+    evaluate.add_argument(
+        "--keep-database", action="store_true", help="keep the isolated evaluation database"
+    )
     arguments = parser.parse_args(argv)
 
     settings = Settings()
     configure_logging(settings.log_level)
+    if arguments.command == "eval":
+        return asyncio.run(_evaluate(settings, arguments))
     return asyncio.run(_index(settings, rebuild=arguments.rebuild))
+
+
+async def _evaluate(settings: Settings, arguments: argparse.Namespace) -> int:
+    from easyrag.evaluation.dataset import DatasetError, load_dataset
+    from easyrag.evaluation.report import format_summary, write_report
+    from easyrag.evaluation.runner import run_evaluation
+
+    try:
+        dataset = load_dataset(arguments.dataset)
+    except DatasetError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_CONFIGURATION
+    try:
+        report = await run_evaluation(
+            settings,
+            dataset,
+            retrieval_only=arguments.retrieval_only,
+            keep_database=arguments.keep_database,
+            progress=lambda message: print(message, file=sys.stderr, flush=True),
+        )
+    except EmbeddingProviderUnavailableError as exc:
+        print(f"error: embedding model unavailable: {exc}", file=sys.stderr)
+        return EXIT_UNAVAILABLE
+
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    output = arguments.output or Path("eval/reports") / f"{dataset.name}-{stamp}.json"
+    write_report(report, output)
+    print(format_summary(report))
+    print(f"\nReport: {output}")
+    return EXIT_OK
 
 
 async def _index(settings: Settings, *, rebuild: bool) -> int:

@@ -4,7 +4,7 @@ A self-hosted, local-first Retrieval-Augmented Generation system for your Markdo
 documents. It runs entirely on your machine — Python, FastAPI, PostgreSQL + pgvector and
 Ollama — with no external SaaS.
 
-> **Status: Phase 18 — optional reranking.** Hybrid retrieval (meaning + exact terms) with an optional cross-encoder reranker. The index follows your files live; ask with `POST /api/v1/chat`.
+> **Status: Phase 19 — evaluation.** Measured baseline: 77% of answerable questions answered correctly with citations, 88% of unanswerable ones refused (see `easyrag eval`). Prompt injection is not yet defended.
 > See [ROADMAP.md](ROADMAP.md) for progress.
 
 ## What it will do
@@ -241,6 +241,33 @@ New migrations go in `src/easyrag/storage/migrations/versions/`. Review autogene
 migrations before committing; the integration suite fails if models and migrations differ.
 
 Configuration is read from `EASYRAG_*` environment variables. See [.env.example](.env.example).
+
+## Evaluating quality
+
+`easyrag eval` measures retrieval and answer quality on a labelled dataset. It indexes the
+dataset into a **throwaway database** on your PostgreSQL server, so it never touches your
+index. The project ships `eval/datasets/nimbus`: documentation for a *fictional* backup
+tool, so a correct answer can only come from retrieval, never from the model's prior
+knowledge. It has 30 questions: factual, paraphrased, identifier-style, unanswerable, and
+two with a planted prompt injection.
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d db ollama ollama-pull
+export EASYRAG_DATABASE_URL=postgresql+psycopg://easyrag:<password>@127.0.0.1:5432/easyrag
+export EASYRAG_OLLAMA_BASE_URL=http://127.0.0.1:11434
+uv run easyrag eval eval/datasets/nimbus --retrieval-only   # seconds: compares 6 retrieval configs
+uv run easyrag eval eval/datasets/nimbus                    # + answers with the real model (slow on CPU)
+```
+
+The report (JSON, in `eval/reports/`) covers:
+- retrieval hit@1, hit@k and MRR for vector, keyword and hybrid, each with and without
+  reranking;
+- answer correctness (key facts present), citation precision, refusal accuracy on
+  unanswerable questions, and resistance to prompt injection;
+- latency p50/p95;
+- a suggested similarity threshold, and a snapshot of the configuration that produced it.
+
+To evaluate your own documents, copy the dataset layout: `corpus/` plus `questions.yaml`.
 
 ## Note on `./docs`
 
