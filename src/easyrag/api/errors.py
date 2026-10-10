@@ -19,6 +19,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import DBAPIError
 
+from easyrag.api.limits import ServiceBusyError
 from easyrag.domain.errors import IndexIncompatibleError
 from easyrag.embeddings.base import EmbeddingProviderUnavailableError, EmbeddingResponseError
 from easyrag.ingestion.coordinator import IndexRunInProgressError
@@ -86,6 +87,21 @@ async def _index_running(request: Request, exc: Exception) -> JSONResponse:
     )
 
 
+# Seconds a client should wait before retrying a "busy" request.
+BUSY_RETRY_AFTER_SECONDS = 10
+
+
+async def _busy(request: Request, exc: Exception) -> JSONResponse:
+    logger.warning("Rejected a request: %s", exc)
+    response = error_response(
+        status.HTTP_503_SERVICE_UNAVAILABLE,
+        "busy",
+        "Too many questions are being answered right now; retry shortly",
+    )
+    response.headers["Retry-After"] = str(BUSY_RETRY_AFTER_SECONDS)
+    return response
+
+
 async def _database_error(request: Request, exc: Exception) -> JSONResponse:
     logger.error("Database error (%s)", type(exc).__name__)  # message may contain the DSN
     return error_response(
@@ -122,5 +138,6 @@ def register_error_handlers(app: FastAPI) -> None:
     app.add_exception_handler(LLMResponseError, _counted(_llm_response))
     app.add_exception_handler(IndexIncompatibleError, _counted(_index_incompatible))
     app.add_exception_handler(IndexRunInProgressError, _counted(_index_running))
+    app.add_exception_handler(ServiceBusyError, _counted(_busy))
     app.add_exception_handler(DBAPIError, _counted(_database_error))
     app.add_exception_handler(Exception, _counted(_unexpected_error))

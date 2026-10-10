@@ -5,10 +5,14 @@ Grounding is enforced in layers (ARCHITECTURE D12, D13):
    without calling it.
 2. Prompt contract: answer only from the sources and cite them as [n].
 3. Verification: classify the reply (refusal / cited / uncited), keep only valid
-   citations, and return exactly the cited sources. A reply without valid markers is
-   attributed server-side by lexical support (``rag.attribution``); only a reply that is
-   neither cited nor supported is ungrounded, and is refused or flagged according to the
+   citations, and return exactly the cited sources. A cited reply must be supported by
+   the sources it cites, sentence by sentence (``rag.verification``, D39). A reply without
+   valid markers is attributed server-side by lexical support (``rag.attribution``). A
+   reply that fails either is ungrounded, and is refused or flagged according to the
    ``UngroundedPolicy``.
+
+Before generation, instruction-like text in the sources is redacted (``easyrag.injection``,
+D39), and verification uses the text the model was actually shown.
 
 Depends only on ports (``Retriever``, ``LLMProvider``) and pure helpers, never on
 Ollama, pgvector, HTTP or FastAPI (enforced by tests/unit/test_architecture.py).
@@ -25,6 +29,7 @@ from easyrag.llm.base import Generation, GenerationOptions, LLMProvider
 from easyrag.rag.attribution import attribute
 from easyrag.rag.citations import apply_citations, is_refusal
 from easyrag.rag.prompt import PROMPT_VERSION, REFUSAL, BuiltPrompt, PromptBuilder
+from easyrag.rag.verification import verify_citations
 from easyrag.retrieval.base import Retriever
 
 logger = logging.getLogger(__name__)
@@ -71,6 +76,14 @@ class RagService:
         retrieved_at = time.perf_counter()
         prompt = self._prompt_builder.build(question, chunks)
 
+        if prompt.redacted:
+            logger.warning(
+                "Removed instruction-like text (possible prompt injection) from %d source(s) "
+                "before generation: %s",
+                len(prompt.redacted),
+                ", ".join(sorted({chunk.source_path for chunk in prompt.redacted})),
+            )
+
         if not prompt.included:  # evidence gate: never ask the model without sources
             return self._finish(
                 question, chunks, prompt, None, Outcome.NO_EVIDENCE, (), 0,
@@ -91,19 +104,34 @@ class RagService:
         citations = apply_citations(generation.text, len(prompt.included))
         cited = tuple(prompt.included[number - 1] for number in citations.cited)
         invalid = len(citations.invalid)
+        unverified = 0
         if cited:
-            return self._finish(
-                question, chunks, prompt, generation, Outcome.ANSWERED, cited, invalid,
-                text=citations.text, status="answered", timings=timings, attribution="explicit",
-            )  # fmt: skip
-
-        inferred = attribute(citations.text, prompt.included)
-        if inferred.supported:
-            return self._finish(
-                question, chunks, prompt, generation, Outcome.ANSWERED, inferred.sources,
-                invalid, text=citations.text, status="answered", timings=timings,
-                attribution="inferred",
-            )  # fmt: skip
+            verification = verify_citations(generation.text, prompt.evidence)
+            if verification.corrected:
+                logger.info("Corrected %d misattributed citation(s)", len(verification.corrected))
+                citations = apply_citations(verification.reply, len(prompt.included))
+                cited = tuple(prompt.included[number - 1] for number in citations.cited)
+            if verification.verified:
+                return self._finish(
+                    question, chunks, prompt, generation, Outcome.ANSWERED, cited, invalid,
+                    text=citations.text, status="answered", timings=timings,
+                    attribution="explicit",
+                )  # fmt: skip
+            unverified = len(verification.failures)
+            logger.warning(
+                "Cited answer failed verification: %d sentence(s) not supported by the "
+                "sources they cite",
+                unverified,
+            )
+            logger.debug("Unverified sentences: %r", verification.failures)  # model output
+        else:
+            inferred = attribute(citations.text, prompt.included, prompt.evidence)
+            if inferred.supported:
+                return self._finish(
+                    question, chunks, prompt, generation, Outcome.ANSWERED, inferred.sources,
+                    invalid, text=citations.text, status="answered", timings=timings,
+                    attribution="inferred",
+                )  # fmt: skip
 
         status: AnswerStatus
         if self._ungrounded_policy == "flag":
@@ -112,7 +140,7 @@ class RagService:
             text, status = REFUSAL, "insufficient_evidence"
         return self._finish(
             question, chunks, prompt, generation, Outcome.UNGROUNDED, (), invalid,
-            text=text, status=status, timings=timings,
+            text=text, status=status, timings=timings, unverified=unverified,
         )  # fmt: skip
 
     def _finish(
@@ -129,6 +157,7 @@ class RagService:
         status: AnswerStatus,
         timings: tuple[float, float, float],
         attribution: str | None = None,
+        unverified: int = 0,
     ) -> Answer:
         started, retrieved_at, generated_at = timings
         trace = RagTrace(
@@ -149,6 +178,8 @@ class RagService:
             generation_seconds=generated_at - retrieved_at,
             total_seconds=time.perf_counter() - started,
             reranked=any(chunk.rerank_score is not None for chunk in retrieved),
+            redacted_sources=len(prompt.redacted),
+            unverified_sentences=unverified,
         )
         _log(trace)
         logger.debug("Question: %r", question)  # user content only at DEBUG
@@ -208,6 +239,8 @@ def _log(trace: RagTrace) -> None:
                 "cited": len(trace.cited_chunk_ids),
                 "attribution": trace.attribution,
                 "invalid_citations": trace.invalid_citations,
+                "redacted_sources": trace.redacted_sources,
+                "unverified_sentences": trace.unverified_sentences,
                 "prompt_tokens": trace.prompt_tokens,
                 "prompt_tokens_estimate": trace.prompt_tokens_estimate,
                 "completion_tokens": trace.completion_tokens,

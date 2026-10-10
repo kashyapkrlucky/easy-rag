@@ -13,12 +13,18 @@ results can always be attributed to an exact prompt.
 import hashlib
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Literal
 
 from easyrag.domain.chunks import RetrievedChunk
+from easyrag.injection import redact
 from easyrag.llm.base import ChatMessage
 from easyrag.tokens import estimate_tokens
 
 PROMPT_VERSION = "4"
+
+# redact: instruction-like sentences in sources are replaced before the model sees them
+# (easyrag.injection, ARCHITECTURE D39); off: sources are passed unchanged.
+InjectionFilter = Literal["redact", "off"]
 
 # The exact reply for unanswerable questions (detected by rag.citations.is_refusal).
 REFUSAL = "I don't know based on the provided documents."
@@ -80,6 +86,12 @@ class BuiltPrompt:
     included: tuple[RetrievedChunk, ...]
     excluded: tuple[RetrievedChunk, ...]
     tokens_estimate: int
+    # What the model was shown of each included chunk, in prompt order: document, section
+    # heading and the (redacted) text. Answers are verified against exactly this: not
+    # against removed text, and including headings ("Error N-207: version mismatch").
+    evidence: tuple[str, ...] = ()
+    # Included chunks that had instruction-like text removed.
+    redacted: tuple[RetrievedChunk, ...] = ()
 
 
 class PromptBuilder:
@@ -97,7 +109,9 @@ class PromptBuilder:
         max_output_tokens: int,
         max_context_tokens: int,
         safety_margin_tokens: int = 256,
+        injection_filter: InjectionFilter = "redact",
     ) -> None:
+        self._injection_filter = injection_filter
         fixed = sum(estimate_tokens(m.content) for m in _example_messages())
         fixed += estimate_tokens(SYSTEM_PROMPT) + estimate_tokens(_USER_TEMPLATE)
         available = context_window - max_output_tokens - safety_margin_tokens - fixed
@@ -117,15 +131,24 @@ class PromptBuilder:
         budget = self._budget - estimate_tokens(question)
         included: list[RetrievedChunk] = []
         excluded: list[RetrievedChunk] = []
+        evidence: list[str] = []
+        redacted: list[RetrievedChunk] = []
         blocks: list[str] = []
         used = 0
         for chunk in chunks:  # best first
-            block = _source_block(len(included) + 1, chunk)
+            text, removed = chunk.content, False
+            if self._injection_filter == "redact":
+                redaction = redact(chunk.content)
+                text, removed = redaction.text, bool(redaction.removed)
+            block = _source_block(len(included) + 1, chunk, text)
             cost = estimate_tokens(block) + 1  # + separator
             if used + cost > budget:
                 excluded.append(chunk)  # skip; a smaller, lower-ranked chunk may still fit
                 continue
             included.append(chunk)
+            evidence.append(f"{chunk.source_path}\n{_section(chunk)}\n{text}")
+            if removed:
+                redacted.append(chunk)
             blocks.append(block)
             used += cost
 
@@ -142,17 +165,22 @@ class PromptBuilder:
             included=tuple(included),
             excluded=tuple(excluded),
             tokens_estimate=sum(estimate_tokens(m.content) for m in messages),
+            evidence=tuple(evidence),
+            redacted=tuple(redacted),
         )
 
 
-def _source_block(number: int, chunk: RetrievedChunk) -> str:
-    section = " > ".join(chunk.heading_path) or chunk.document_title
+def _section(chunk: RetrievedChunk) -> str:
+    return " > ".join(chunk.heading_path) or chunk.document_title
+
+
+def _source_block(number: int, chunk: RetrievedChunk, content: str) -> str:
     return _SOURCE_TEMPLATE.format(
         id=number,
         document=_attribute(chunk.source_path),
-        section=_attribute(section),
+        section=_attribute(_section(chunk)),
         # A document must not be able to close its own block and add text outside it.
-        content=chunk.content.replace("</source>", "</ source>"),
+        content=content.replace("</source>", "</ source>"),
     )
 
 

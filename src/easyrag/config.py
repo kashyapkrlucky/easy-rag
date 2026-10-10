@@ -161,6 +161,13 @@ class Settings(BaseSettings):
     # A reply citing no source: "refuse" replaces it with the refusal sentence,
     # "flag" returns it marked as ungrounded (ARCHITECTURE D30).
     rag_ungrounded_policy: Literal["refuse", "flag"] = "refuse"
+    # Instruction-like text in documents (prompt injection): "redact" removes it from the
+    # prompt (users still see the original sources); "off" for a corpus *about* prompts,
+    # whose examples would otherwise be removed (ARCHITECTURE D39).
+    rag_injection_filter: Literal["redact", "off"] = "redact"
+    # Questions answered at the same time; more get 503 "busy" with Retry-After instead
+    # of queueing behind slow CPU generation until they time out.
+    chat_max_concurrent: int = Field(default=4, ge=1, le=256)
 
     # --- Embeddings --------------------------------------------------------------------
     # Pin a tag, not "latest": a silently updated model would change every vector.

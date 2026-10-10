@@ -126,6 +126,8 @@ class TraceResponse(BaseModel):
     excluded_chunk_ids: list[str] = Field(description="Retrieved, but over the token budget")
     cited_chunk_ids: list[str]
     invalid_citations: int
+    redacted_sources: int = Field(description="Sources with instruction-like text removed")
+    unverified_sentences: int = Field(description="Cited sentences their sources don't support")
     attribution: str | None = Field(description="explicit ([n] markers) or inferred")
     finish_reason: str | None
     prompt_tokens: int | None
@@ -150,6 +152,8 @@ class TraceResponse(BaseModel):
             excluded_chunk_ids=list(trace.excluded_chunk_ids),
             cited_chunk_ids=list(trace.cited_chunk_ids),
             invalid_citations=trace.invalid_citations,
+            redacted_sources=trace.redacted_sources,
+            unverified_sentences=trace.unverified_sentences,
             attribution=trace.attribution,
             finish_reason=trace.finish_reason,
             prompt_tokens=trace.prompt_tokens,

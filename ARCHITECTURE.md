@@ -1046,7 +1046,7 @@ numbers must match.
     (0.61–0.89 vs 0.60–0.74). The best threshold, 0.70 (balanced accuracy 80.7%), would
     wrongly gate 3 of 22 answerable questions. The model's own refusals already reach
     87.5%.
-- **Findings carried forward** (see ROADMAP Phase 25 hardening):
+- **Findings carried forward** (findings 1 and 2 resolved in Phase 25, D39):
   1. **Explicit citations aren't verified.** "Version 2.3 removed NIMBUS_COMPRESSION" was
      a wrong number with a *wrong* explicit citation, and passed as `answered`. The
      number and support check (D30) runs only for uncited replies.
@@ -1202,6 +1202,66 @@ numbers must match.
   - no dependency on `ollama`;
   - all three file combinations valid under `docker compose config` with an empty
     environment (skipped without Docker).
+
+**D39 — Hardening against injection and wrong citations (Phase 25).** This resolves
+findings 1 and 2 of D34, measured with the same evaluation before and after
+([BENCHMARKS.md](BENCHMARKS.md)): answerable questions correct 77.3% → 90.9%, wrong answers
+4 → 0, citation precision 83% → 97.5%, injection resisted 0% → 100%. Refusals unchanged
+(87.5%).
+- **Injection redaction (`easyrag/injection.py`, `EASYRAG_RAG_INJECTION_FILTER=redact`).**
+  - Before generation, every sentence with instruction-like text addressed to an AI is
+    replaced by `[removed: instruction-like text]` in the *prompt copy* of the source.
+    That covers overriding rules (with a qualifier: "ignore *all previous*
+    instructions"), dictating every reply, role changes, "system prompt", chat-template
+    and role tokens.
+  - Users still see the original text. A WARNING names the affected documents, and
+    `easyrag_rag_redacted_sources_total` counts them.
+  - Why remove rather than warn the model: the 1.5B model followed a planted instruction
+    despite the framing and the restated rules (D34), and it did so for *other* questions
+    whose retrieval included the poisoned section. A model can't be relied on to ignore
+    text it sees.
+  - Sentences split on `.!?` followed by whitespace, or on blank lines, but not on a
+    single newline: hard-wrapped Markdown keeps a wrapped instruction in one sentence.
+  - The patterns were checked against this repository's own documentation for false
+    positives ("system message" was dropped as ordinary vocabulary). A corpus *about*
+    prompts sets the filter `off`.
+- **Verification uses exactly what the model was shown:** the document path, the section
+  heading and the redacted text (`BuiltPrompt.evidence`). An answer echoing removed text is
+  unsupported. An answer quoting an error code that appears only in a heading
+  ("N-207") is supported. The first version used the chunk text alone and wrongly
+  refused that answer in the evaluation.
+- **Explicit citations are verified (`rag/verification.py`).**
+  - *Cited sentences:* every number must occur in the cited sources, and ≥ 40% of the
+    sentence's content words. That's lower than the 60% used to infer sources, because a
+    cited sentence names its evidence and paraphrase is common.
+  - *Uncited sentences in a cited answer:* their numbers must occur in some source.
+  - *Markers after the full stop* ("… zstd. [1]") belong to the previous sentence.
+  - *Failure:* the answer is ungrounded, then refused or flagged by the policy.
+- **Misattributed citations are corrected, not refused.** Small models cite the wrong
+  source number for correct claims (seen in the evaluation). If a failing sentence is
+  fully supported by another shown source, by the inference standard (all numbers, ≥ 60%
+  of words), its marker is re-pointed there. The wrong-number case still fails: neither
+  release-notes section supports "2.3 … removed".
+- **Shared word normalisation (`rag.attribution.content_words`).** Digits split from
+  letters ("2GB" → 2, gb). Number words count as digits ("four" → 4), except "one", which is
+  usually a pronoun. Without this, a strict numbers rule would reject "4 hours" against
+  "four hours".
+- **Limits, stated plainly:** the checks are lexical. They confirm that words and numbers
+  come from the sources, not that the reasoning is right; the one remaining wrong
+  "answer" to an unanswerable question is built from real sentences about another topic.
+  Redaction is a heuristic: rephrased, obfuscated or non-English instructions can pass
+  ([SECURITY.md](SECURITY.md)).
+- **Chat concurrency limit (`EASYRAG_CHAT_MAX_CONCURRENT=4`).** A non-blocking counter:
+  requests over the limit get `503 busy` with `Retry-After: 10` instead of an unbounded
+  queue that ends in timeouts (Ollama answers one request at a time by default). It's a
+  single event loop, so check-and-increment can't race, and the slot is always released,
+  including on errors. Per-client rate limiting is left to a reverse proxy.
+- **Operations documentation:**
+  - [OPERATIONS.md](OPERATIONS.md): readiness states, logs, alert expressions, tasks,
+    troubleshooting by symptom;
+  - [SECURITY.md](SECURITY.md): trust boundaries, controls, limits, failure-mode table;
+  - [examples/](examples/README.md): a fictional corpus with expected answers, and
+    stdlib-Python and curl clients, kept honest by tests.
 ---
 
 ## 10. API surface (target)
@@ -1281,6 +1341,8 @@ Chat contract (target):
 | `EASYRAG_DATABASE_PASSWORD_FILE` | unset (Compose: the generated password file) | 24 |
 | `EASYRAG_OLLAMA_PULL_MODELS` | `true` (pull missing models on start) | 24 |
 | `EASYRAG_{OLLAMA,APP,DB}_MEMORY_LIMIT` (Compose only) | `3g` / `1g` / `1g` | 24 |
+| `EASYRAG_RAG_INJECTION_FILTER` | `redact` (`off` for a corpus about prompts) | 25 |
+| `EASYRAG_CHAT_MAX_CONCURRENT` | `4` (more: `503 busy`) | 25 |
 
 The exact model defaults are chosen and justified in Phases 8 and 12.
 

@@ -211,3 +211,15 @@ async def test_provider_timeouts_are_recorded() -> None:
         )
         == 1
     )
+
+
+def test_redactions_and_unverified_answers_are_counted() -> None:
+    metrics = Metrics()
+    trace = replace(TRACE, outcome=Outcome.UNGROUNDED, redacted_sources=2, unverified_sentences=1)
+
+    metrics.record_answer(
+        Answer("q", "x", "insufficient_evidence", (), False, trace), retrieval_config="hybrid"
+    )
+
+    assert sample(metrics, "easyrag_rag_redacted_sources_total") == 2
+    assert sample(metrics, "easyrag_rag_unverified_answers_total") == 1

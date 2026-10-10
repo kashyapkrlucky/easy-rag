@@ -49,6 +49,10 @@ class RagTrace:
     total_seconds: float
     # True if the retrieved scores are reranker probabilities (reranking ran).
     reranked: bool = False
+    # Included sources with instruction-like text removed before generation.
+    redacted_sources: int = 0
+    # Sentences of a cited reply not supported by the sources they cite.
+    unverified_sentences: int = 0
 
 
 @dataclass(frozen=True, slots=True)

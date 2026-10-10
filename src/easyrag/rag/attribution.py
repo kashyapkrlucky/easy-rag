@@ -8,7 +8,8 @@ Method (deterministic, lexical): split the answer into sentences. A sentence is
 *supported* by a source when at least ``SENTENCE_SUPPORT`` of its content words occur in
 that source **and every number in the sentence occurs in it** (a wrong number is the
 most harmful kind of hallucination). Words are lower-cased, identifiers are split on
-punctuation (``postgres_password`` → postgres, password) and a plural "s" is stripped.
+punctuation (``postgres_password`` → postgres, password), numbers are split from letters
+("2GB" → 2, gb), number words count as digits ("four" → 4) and a plural "s" is stripped.
 The answer is supported when supported sentences cover at least ``ANSWER_COVERAGE`` of
 its content words; each supported sentence is attributed to the source supporting it best.
 
@@ -27,7 +28,17 @@ from easyrag.stopwords import STOPWORDS
 SENTENCE_SUPPORT = 0.6
 ANSWER_COVERAGE = 0.7
 
-_WORD = re.compile(r"[^\W_]+")  # letters/digits; "_", "-", "." and ":" separate words
+# Runs of digits or of letters; "_", "-", "." and ":" separate words, and so does a change
+# between digits and letters ("2GB", "arm64").
+_WORD = re.compile(r"\d+|[^\W\d_]+")
+# Number words count as digits on both sides ("four hours" supports "4 hours"). Not "one":
+# it is usually a pronoun ("the newer one") and would demand a "1" in the source.
+_NUMBER_WORDS = {
+    "zero": "0", "two": "2", "three": "3", "four": "4", "five": "5", "six": "6",
+    "seven": "7", "eight": "8", "nine": "9", "ten": "10", "eleven": "11", "twelve": "12",
+    "fifteen": "15", "twenty": "20", "thirty": "30", "forty": "40", "fifty": "50",
+    "sixty": "60", "hundred": "100",
+}  # fmt: skip
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s+|\n+")
 _MARKER = re.compile(r"\[\s*\d+(?:\s*[,;]\s*\d+)*\s*\]")
 
@@ -41,17 +52,20 @@ class Attribution:
     coverage: float
 
 
-def attribute(answer: str, chunks: Sequence[RetrievedChunk]) -> Attribution:
-    chunk_words = [_content_words(chunk.content) for chunk in chunks]
+def attribute(
+    answer: str, chunks: Sequence[RetrievedChunk], texts: Sequence[str] | None = None
+) -> Attribution:
+    """``texts``: what the model was shown for each chunk (default: the chunk content)."""
+    chunk_words = [content_words(text) for text in (texts or [c.content for c in chunks])]
     total = 0
     covered = 0
     used: list[int] = []
     for sentence in _SENTENCE_END.split(_MARKER.sub(" ", answer)):
-        words = _content_words(sentence)
+        words = content_words(sentence)
         if not words:
             continue
         total += len(words)
-        numbers = {word for word in words if word.isdigit()}
+        numbers = numbers_in(words)
         best, best_support = -1, 0.0
         for index, candidates in enumerate(chunk_words):
             if not numbers <= candidates:
@@ -73,12 +87,17 @@ def attribute(answer: str, chunks: Sequence[RetrievedChunk]) -> Attribution:
     )
 
 
-def _content_words(text: str) -> set[str]:
+def content_words(text: str) -> set[str]:
+    words = (w.lower() for w in _WORD.findall(text))
     return {
-        _singular(word)
-        for word in (w.lower() for w in _WORD.findall(text))
-        if word not in STOPWORDS and (len(word) > 2 or word.isdigit())
+        _NUMBER_WORDS.get(word) or _singular(word)
+        for word in words
+        if word in _NUMBER_WORDS or (word not in STOPWORDS and (len(word) > 2 or word.isdigit()))
     }
+
+
+def numbers_in(words: set[str]) -> set[str]:
+    return {word for word in words if word.isdigit()}
 
 
 def _singular(word: str) -> str:

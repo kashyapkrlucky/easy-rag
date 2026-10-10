@@ -180,3 +180,29 @@ def test_chat_returns_the_trace_on_request(make_settings: SettingsFactory) -> No
     assert trace["reranked"] is False
     assert trace["finish_reason"] == "stop"
     assert "content" not in json.dumps(trace)  # ids and numbers only, never document text
+
+
+def test_chat_over_the_concurrency_limit_is_busy(make_settings: SettingsFactory) -> None:
+    rag = StubRag(make_answer())
+    with client_with(make_settings(chat_max_concurrent=1), rag) as client:
+        slots = client.app.state.container.chat_slots  # type: ignore[attr-defined]
+        with slots.slot():  # another question is being answered
+            busy = client.post("/api/v1/chat", json={"question": "q"})
+        after = client.post("/api/v1/chat", json={"question": "q"})
+
+    assert busy.status_code == 503
+    assert busy.json()["error"]["code"] == "busy"
+    assert busy.headers["retry-after"] == "10"
+    assert rag.calls == [{"question": "q", "top_k": None}]  # only the second one ran
+    assert after.status_code == 200
+
+
+def test_slot_is_released_when_answering_fails(make_settings: SettingsFactory) -> None:
+    rag = StubRag(LLMProviderUnavailableError("down"))
+    with client_with(make_settings(chat_max_concurrent=1), rag) as client:
+        first = client.post("/api/v1/chat", json={"question": "q"})
+        second = client.post("/api/v1/chat", json={"question": "q"})
+        active = client.app.state.container.chat_slots.active  # type: ignore[attr-defined]
+
+    assert (first.status_code, second.status_code, active) == (503, 503, 0)
+    assert second.json()["error"]["code"] == "llm_unavailable"  # not "busy"

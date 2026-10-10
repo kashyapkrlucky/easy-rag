@@ -24,6 +24,8 @@ Decision references (D1–D24) point to [ARCHITECTURE.md §9](ARCHITECTURE.md#9-
 | **M6 Operability** | 20–22 | Logs, metrics, traces, and authentication |
 | **M7 Product** | 23–25 | Web UI, one-command deployment, docs and benchmarks |
 
+**All milestones are complete.** Measured results: [BENCHMARKS.md](BENCHMARKS.md).
+
 ---
 
 ## Phases
@@ -227,7 +229,23 @@ Decision references (D1–D24) point to [ARCHITECTURE.md §9](ARCHITECTURE.md#9-
 ### Phase 25 — Documentation, examples, benchmarks, hardening
 - **Objective:** an `examples/docs` corpus, a benchmark report from the eval suite, a troubleshooting guide, and a security and failure-mode review.
 - **Carried from Phase 19 (D34):** verify *explicit* citations too (numbers and support), since a wrong number with a wrong citation passed; treat prompt injection as a corpus-level risk (it hijacked a non-injection question); re-run `easyrag eval` and compare with the D34 baseline after every change.
-- **Commit:** `docs: add examples, benchmarks and operations guide`
+- **Done, hardening (D39):**
+  - **Injection:** `easyrag/injection.py` redacts instruction-like sentences from the prompt copy of sources (`EASYRAG_RAG_INJECTION_FILTER`).
+  - **Verification:** `rag/verification.py` verifies explicit citations sentence by sentence (numbers and support) and corrects misattributed ones. Verification and attribution use exactly what the model saw (path, heading, redacted text). Number and unit normalisation is shared.
+  - **Limits and observability:** `/chat` concurrency limit (`EASYRAG_CHAT_MAX_CONCURRENT`, `503 busy` with `Retry-After`); trace fields and metrics for redactions and unverified answers.
+- **Done, documentation:** `examples/` (Orbit corpus with expected answers, `ask.py` and `ask.sh` clients), [BENCHMARKS.md](BENCHMARKS.md), [OPERATIONS.md](OPERATIONS.md), [SECURITY.md](SECURITY.md), README status and links; `eval` and `examples` excluded from the Docker build context.
+- **Measured** (`easyrag eval`, same machine, baseline reproduced exactly first):
+  - answerable correct 77.3% → 90.9%, wrong answers 4 → 0, citation precision 83.3% → 97.5%, injection resisted 0% → 100%, refusals unchanged at 87.5%;
+  - three iterations: the first verifier wrongly refused 2 correct answers (a miscited claim, an error code only in a heading), and both were fixed by design changes, not by loosening thresholds.
+- **Tests:**
+  - injection: 16 attack forms detected, 8 ordinary sentences untouched, sentence boundaries, wrapped lines, decimals;
+  - verification: wrong number, wrong source corrected, correction needs full support, trailing markers, units and number words, uncited numbers;
+  - service: never reaches the model, echo of redacted text refused, refuse and flag policies, headings, correction;
+  - busy limit and slot release; metrics; examples (corpus indexes, README answers present, no injection text, clients valid);
+  - three mutation checks (numbers rule, redaction default, headings in evidence).
+- **Clients, live:** both against a local server (key, no key, refusal, error, quotes in the question); the shell client's header word-splitting and exit codes were fixed.
+- **Status:** ✅ done
+- **Commits:** `feat: verify citations and redact prompt injection`, then `docs: add examples, benchmarks and operations guide`
 
 ---
 

@@ -11,6 +11,7 @@ import httpx2
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from easyrag import __version__
+from easyrag.api.limits import ConcurrencyLimit
 from easyrag.config import Settings
 from easyrag.domain.answers import Answer
 from easyrag.embeddings.base import EmbeddingProvider
@@ -63,6 +64,8 @@ class AppContainer:
     reranker: FastEmbedReranker
     models: ModelPuller
     rag: RagService
+    # In-flight /chat requests (EASYRAG_CHAT_MAX_CONCURRENT).
+    chat_slots: ConcurrencyLimit
     metrics: Metrics
     # Reported by /health/ready, in this order.
     readiness_checks: Mapping[str, ReadinessCheck]
@@ -170,6 +173,7 @@ def build_container(settings: Settings) -> AppContainer:
             context_window=llm.context_window,
             max_output_tokens=settings.llm_max_output_tokens,
             max_context_tokens=settings.rag_max_context_tokens,
+            injection_filter=settings.rag_injection_filter,
         ),
         generation_options=GenerationOptions(
             temperature=settings.llm_temperature,
@@ -226,6 +230,7 @@ def build_container(settings: Settings) -> AppContainer:
         reranker=reranker,
         models=models,
         rag=rag,
+        chat_slots=ConcurrencyLimit(settings.chat_max_concurrent),
         metrics=metrics,
         readiness_checks={
             "database": database,

@@ -362,6 +362,7 @@ async def run_evaluation(
             "rerank_model": settings.rerank_model,
             "rag_max_context_tokens": settings.rag_max_context_tokens,
             "rag_ungrounded_policy": settings.rag_ungrounded_policy,
+            "rag_injection_filter": settings.rag_injection_filter,
         },
         "run": {
             "started_at": datetime.now(UTC).isoformat(),

@@ -60,6 +60,29 @@ def is_refusal(text: str, refusal: str) -> bool:
     return _normalise(text).startswith(_normalise(refusal))
 
 
+def marker_ids(text: str) -> list[int]:
+    """Every source id cited in ``text``, in order (including out-of-range ones)."""
+    return [number for match in _MARKER.finditer(text) for number in _ids(match)]
+
+
+def strip_markers(text: str) -> str:
+    return _MARKER.sub(" ", text)
+
+
+def recite(text: str, number: int) -> str:
+    """Replace the markers in ``text`` with a single ``[number]`` (at the first marker)."""
+    first = True
+
+    def replace(match: re.Match[str]) -> str:
+        nonlocal first
+        if not first:
+            return ""
+        first = False
+        return match.group("space") + f"[{number}]"
+
+    return _MARKER.sub(replace, text)
+
+
 def _ids(match: re.Match[str]) -> list[int]:
     return [int(number) for number in _NUMBER.findall(match.group("ids"))]
 

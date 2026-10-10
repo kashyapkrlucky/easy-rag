@@ -21,3 +21,7 @@ docs
 
 Dockerfile
 docker-compose*.yml
+
+# Evaluation data and examples are not needed in the image.
+eval
+examples

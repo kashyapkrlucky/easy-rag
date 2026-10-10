@@ -4,10 +4,9 @@ A self-hosted, local-first Retrieval-Augmented Generation system for your Markdo
 documents. It runs entirely on your machine — Python, FastAPI, PostgreSQL + pgvector and
 Ollama — with no external SaaS.
 
-> **Status: Phase 24 — one-command deployment.** `docker compose up -d` with no configuration: models download automatically, and a host Ollama is one line in `.env`. Measured baseline: 77% of answerable questions answered correctly with citations, 88% of unanswerable ones refused (`easyrag eval`). Prompt injection is not yet defended.
-> See [ROADMAP.md](ROADMAP.md) for progress.
+> **Status: feature-complete (all 26 roadmap phases).** On the evaluation set, 91% of answerable questions are answered correctly with verified citations and **none wrongly**. 88% of unanswerable questions are refused, and the planted prompt injections are resisted. That's with a 1 GB model on CPU ([BENCHMARKS.md](BENCHMARKS.md)).
 
-## What it will do
+## What it does
 
 1. Put Markdown files in `./docs`
 2. Run `docker compose up`
@@ -41,8 +40,12 @@ answer, EasyRAG says it doesn't know instead of guessing.
 
 ## Documentation
 
+- [examples/](examples/README.md): a sample corpus with questions to try, plus API clients
+- [OPERATIONS.md](OPERATIONS.md): monitoring, common tasks and troubleshooting by symptom
+- [SECURITY.md](SECURITY.md): threat model, controls, limits and failure modes
+- [BENCHMARKS.md](BENCHMARKS.md): measured retrieval and answer quality, and latency
 - [ARCHITECTURE.md](ARCHITECTURE.md): components, data flow, data model and design decisions
-- [ROADMAP.md](ROADMAP.md): the phased development plan
+- [ROADMAP.md](ROADMAP.md): how it was built, phase by phase
 
 ## Quick start
 
@@ -190,13 +193,20 @@ curl -s localhost:8000/api/v1/chat -H 'Content-Type: application/json' \
 - `status` is `answered`, or `insufficient_evidence` when your documents don't answer the
   question. The answer is then `I don't know based on the provided documents.` and
   `sources` is empty.
-- **Answers are verified, not just requested.** When the model doesn't cite, EasyRAG checks
-  that the answer's content, including every number, comes from the sources it was shown.
-  If nothing supports the answer, you get the "I don't know" reply instead. Set
-  `EASYRAG_RAG_UNGROUNDED_POLICY=flag` to receive such answers marked `"grounded": false`.
-- With the default small model, answers take roughly 5–35 s on CPU.
-- **Known limitation:** a small model can still be manipulated by instructions written
-  *inside* a document (prompt injection). Only index documents you trust.
+- **Answers are verified, not just requested.**
+  - Every cited sentence must be supported by the section it cites, including every number.
+    A correct claim cited to the wrong section is re-pointed to the right one.
+  - Answers without citations must be supported by the sources the model was shown.
+  - Anything else gets the "I don't know" reply instead. Set
+    `EASYRAG_RAG_UNGROUNDED_POLICY=flag` to receive such answers marked
+    `"grounded": false`.
+- **Instructions hidden in documents are removed before the model sees them** ("ignore all
+  previous instructions…"). The checks are heuristics, so index documents you trust; see
+  [SECURITY.md](SECURITY.md).
+- **At most 4 questions are answered at once** (`EASYRAG_CHAT_MAX_CONCURRENT`). More get
+  `503 busy` with `Retry-After`.
+- With the default small model, answers take about 4 s (typically) to 10 s on CPU, plus
+  about 10 s to load the model for the first question after a pause.
 
 ### Searching
 

@@ -131,6 +131,16 @@ class Metrics:
             "Citation markers dropped because they referred to no source",
             registry=r,
         )
+        self.rag_redacted_sources = Counter(
+            "easyrag_rag_redacted_sources_total",
+            "Sources with instruction-like text (possible prompt injection) removed",
+            registry=r,
+        )
+        self.rag_unverified = Counter(
+            "easyrag_rag_unverified_answers_total",
+            "Cited answers rejected because sentences were not supported by their sources",
+            registry=r,
+        )
         self.rag_truncated = Counter(
             "easyrag_rag_truncated_answers_total",
             "Answers cut off by the output-token limit",
@@ -192,6 +202,9 @@ class Metrics:
         if trace.attribution is not None:
             self.rag_citations.labels(attribution=trace.attribution).inc()
         self.rag_invalid_citations.inc(trace.invalid_citations)
+        self.rag_redacted_sources.inc(trace.redacted_sources)
+        if trace.unverified_sentences:
+            self.rag_unverified.inc()
         if answer.truncated:
             self.rag_truncated.inc()
 
