@@ -37,13 +37,15 @@ class RetrievedChunk:
     content: str
     start_line: int
     end_line: int
-    # Ranking score of the retriever that produced this result (higher is better):
-    # cosine similarity (vector), matched IDF share in [0, 1] (keyword), or the
-    # Reciprocal Rank Fusion score (hybrid). Compare scores only within one mode.
+    # Ranking score of the stage that produced this result (higher is better): cosine
+    # similarity (vector), matched IDF share in [0, 1] (keyword), the Reciprocal Rank
+    # Fusion score (hybrid), or the reranker's relevance probability. Compare scores only
+    # within one configuration.
     score: float
-    # Component scores, when the chunk was found by that method.
+    # Component scores, when the chunk went through that stage.
     vector_score: float | None = None
     keyword_score: float | None = None
+    rerank_score: float | None = None
 
     @property
     def section(self) -> str:

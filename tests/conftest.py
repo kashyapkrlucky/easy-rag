@@ -25,6 +25,7 @@ def make_settings(monkeypatch: pytest.MonkeyPatch) -> SettingsFactory:
             # No background indexing or file watching unless a test asks for it.
             "index_on_startup": False,
             "watch_enabled": False,
+            "rerank_enabled": False,
             **overrides,
         }
         return Settings(_env_file=None, **values)

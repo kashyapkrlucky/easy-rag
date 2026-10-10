@@ -13,11 +13,24 @@ import pytest
 
 SOURCE = Path(__file__).resolve().parents[2] / "src" / "easyrag"
 
-INFRASTRUCTURE = ("fastapi", "starlette", "sqlalchemy", "pgvector", "psycopg", "httpx2", "alembic")
+INFRASTRUCTURE = (
+    "fastapi",
+    "starlette",
+    "sqlalchemy",
+    "pgvector",
+    "psycopg",
+    "httpx2",
+    "alembic",
+    "fastembed",
+    "onnxruntime",
+    "watchfiles",
+)
 ADAPTERS = (
     "easyrag.ollama",
     "easyrag.embeddings.ollama",
     "easyrag.llm.ollama",
+    "easyrag.rerankers",
+    "easyrag.watcher",
     "easyrag.storage",
     "easyrag.api",
     "easyrag.container",

@@ -1,5 +1,8 @@
 """Watch the docs directory and request incremental index runs (ARCHITECTURE D20).
 
+An adapter (filesystem events via ``watchfiles``), so it lives outside the pipeline
+packages, which must not depend on infrastructure libraries.
+
 The watcher never indexes by itself: it calls ``on_change`` (the coordinator's coalescing
 ``request_run``), so bursts of file events collapse into at most one running and one
 pending run. Three mechanisms feed it:

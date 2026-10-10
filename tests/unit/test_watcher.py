@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from watchfiles import Change
 
-from easyrag.ingestion.watcher import DocsWatcher, MarkdownChangeFilter
+from easyrag.watcher import DocsWatcher, MarkdownChangeFilter
 
 TIMEOUT = 10.0  # generous: CI filesystems can be slow
 

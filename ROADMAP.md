@@ -160,9 +160,9 @@ Decision references (D1–D24) point to [ARCHITECTURE.md §9](ARCHITECTURE.md#9-
 ### Phase 16 — Filesystem change detection
 - **Builds on:** `IndexingCoordinator` (D31). The watcher should *request* a run, coalescing with one already in progress, rather than call the indexer directly.
 - **Objective:** a `watchfiles` watcher with debounce, a polling fallback and periodic re-sync, all feeding the same indexer. (D20)
-- **Files:** `ingestion/watcher.py`, lifespan wiring, config
+- **Files:** `easyrag/watcher.py` (originally `ingestion/watcher.py`; moved in Phase 18), lifespan wiring, config
 - **Tests:** create/modify/delete triggers a sync (temporary directory); debounce coalesces bursts; clean shutdown.
-- **Done:** `ingestion/watcher.py`, coalescing `IndexingCoordinator.request_run()` with `pending` status, watcher state in `/index/status`, `watchfiles` declared as a runtime dependency, settings. Tests: watcher against real temporary directories in **both native-event and polling modes** (create/modify/delete, burst debounce, filtered files, catch-up request, periodic resync, late-appearing directory, prompt clean shutdown; run 6× to check for flakiness); coordinator coalescing (10 requests → 1 follow-up, follow-up after startup retries, no loop on failure). Live: host edits re-indexed in about 1 s through the macOS bind mount; 12-file burst → 1 run.
+- **Done:** the watcher, coalescing `IndexingCoordinator.request_run()` with `pending` status, watcher state in `/index/status`, `watchfiles` declared as a runtime dependency, settings. Tests: watcher against real temporary directories in **both native-event and polling modes** (create/modify/delete, burst debounce, filtered files, catch-up request, periodic resync, late-appearing directory, prompt clean shutdown; run 6× to check for flakiness); coordinator coalescing (10 requests → 1 follow-up, follow-up after startup retries, no loop on failure). Live: host edits re-indexed in about 1 s through the macOS bind mount; 12-file burst → 1 run.
 - **Status:** ✅ done
 - **Commit:** `feat: add filesystem change detection`
 
@@ -176,12 +176,14 @@ Decision references (D1–D24) point to [ARCHITECTURE.md §9](ARCHITECTURE.md#9-
 ### Phase 18 — Reranking
 - **Objective:** the `Reranker` Protocol, a no-op default and one real implementation (chosen per D16), retrieving candidates with `top_k` and keeping the best `top_n`.
 - **Tests:** unit on ordering and truncation; e2e opt-in.
+- **Done (D33):** `retrieval/rerank.py` (`Reranker` port, `RerankingRetriever` with graceful fallback, `NoOpReranker`); `rerankers/fastembed.py` (ONNX cross-encoder, background load, worker-thread inference, readiness); settings and per-request `rerank`; Docker `models` volume, `HF_HOME`, telemetry off (Hugging Face and onnxruntime); `fastembed` + `onnxruntime` declared (the packaging guard caught the latter); watcher moved to `easyrag/watcher.py`. Tests: wrapper (candidate widening, top-k, fallback, validation); adapter with a fake encoder (sigmoid scores, ordering, ties, header text, load states, inference failure); opt-in e2e with the real model. Live: works in Docker on the read-only filesystem after the `HF_HOME` fix; measured no gain over hybrid on the saturated test set, so **off by default**.
+- **Status:** ✅ done
 - **Commit:** `feat: add reranking stage`
 
 ### Phase 19 — Evaluation
 - **Objective:** a dataset format (question, expected document/section, answerable flag, key facts), metrics (recall@k, MRR, citation precision/recall, refusal accuracy, latency p50/p95) and an `easyrag eval` CLI writing a JSON report; calibrate the default similarity threshold.
 - **Files:** `evaluation/`, `eval/datasets/`
-- **Must include (from Phases 13–17):** re-check the default retrieval mode and RRF on a clean corpus (D32); faithfulness beyond lexical support; injection cases; outcome and attribution rates (explicit vs inferred); calibration of the attribution thresholds (D30) alongside the similarity threshold; a corpus free of evaluation notes.
+- **Must include (from Phases 13–18):** re-check the default retrieval mode, RRF and **reranking on/off** on a clean, non-saturated corpus (D32, D33); faithfulness beyond lexical support; injection cases; outcome and attribution rates (explicit vs inferred); calibration of the attribution thresholds (D30) alongside the similarity threshold; a corpus free of evaluation notes.
 - **Commit:** `feat: add RAG evaluation framework`
 
 ### Phase 20 — Structured logging and metrics

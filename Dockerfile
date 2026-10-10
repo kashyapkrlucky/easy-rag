@@ -37,6 +37,8 @@ RUN groupadd --system --gid 10001 easyrag \
  && useradd --system --uid 10001 --gid easyrag --no-create-home --shell /usr/sbin/nologin easyrag
 
 COPY --from=builder /app/.venv /app/.venv
+# Writable model cache (reranker), mounted as a volume; the root filesystem is read-only.
+RUN mkdir -p /data/models && chown easyrag:easyrag /data/models
 COPY --chmod=0755 docker/entrypoint.sh /usr/local/bin/easyrag-entrypoint
 
 ENV PATH="/app/.venv/bin:${PATH}" \

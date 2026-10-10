@@ -27,7 +27,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     for item in items:
         if "tests/e2e" in item.nodeid:
             item.add_marker(pytest.mark.e2e)
-            if not os.environ.get(TEST_OLLAMA_URL_ENV):
+            # Only tests that talk to Ollama need it (fixturenames include dependencies).
+            uses_ollama = "ollama_client" in getattr(item, "fixturenames", ())
+            if uses_ollama and not os.environ.get(TEST_OLLAMA_URL_ENV):
                 item.add_marker(pytest.mark.skip(reason=f"{TEST_OLLAMA_URL_ENV} is not set"))
 
 

@@ -8,9 +8,9 @@ from pydantic import BaseModel, Field, StringConstraints
 from easyrag.domain.answers import Answer
 from easyrag.domain.chunks import RetrievedChunk
 from easyrag.ingestion.coordinator import IndexStatus
-from easyrag.ingestion.watcher import WatcherState
 from easyrag.retrieval.vector import MAX_TOP_K
 from easyrag.storage.index_store import IndexedDocument
+from easyrag.watcher import WatcherState
 
 Query = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2000)]
 
@@ -26,6 +26,9 @@ class RetrieveRequest(BaseModel):
     )
     mode: RetrievalMode | None = Field(
         default=None, description="Override EASYRAG_RETRIEVAL_MODE for this request"
+    )
+    rerank: bool | None = Field(
+        default=None, description="Override EASYRAG_RERANK_ENABLED for this request"
     )
 
 
@@ -43,6 +46,7 @@ class RetrievedChunkResponse(BaseModel):
     )
     vector_score: float | None = Field(description="Cosine similarity, if found by vector")
     keyword_score: float | None = Field(description="Matched IDF share, if found by keyword")
+    rerank_score: float | None = Field(description="Reranker relevance probability, if reranked")
     content: str
 
     @classmethod
@@ -58,6 +62,7 @@ class RetrievedChunkResponse(BaseModel):
             score=round(chunk.score, 6),
             vector_score=None if chunk.vector_score is None else round(chunk.vector_score, 6),
             keyword_score=None if chunk.keyword_score is None else round(chunk.keyword_score, 6),
+            rerank_score=None if chunk.rerank_score is None else round(chunk.rerank_score, 6),
             content=chunk.content,
         )
 
@@ -65,6 +70,7 @@ class RetrievedChunkResponse(BaseModel):
 class RetrieveResponse(BaseModel):
     query: str
     mode: RetrievalMode
+    reranked: bool
     embedding_model: str
     results: list[RetrievedChunkResponse]
 

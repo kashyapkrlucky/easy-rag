@@ -4,7 +4,7 @@ A self-hosted, local-first Retrieval-Augmented Generation system for your Markdo
 documents. It runs entirely on your machine — Python, FastAPI, PostgreSQL + pgvector and
 Ollama — with no external SaaS.
 
-> **Status: Phase 17 — hybrid retrieval.** Questions are matched both by meaning and by exact terms (setting names, error codes, versions). The index follows your files live; ask with `POST /api/v1/chat`.
+> **Status: Phase 18 — optional reranking.** Hybrid retrieval (meaning + exact terms) with an optional cross-encoder reranker. The index follows your files live; ask with `POST /api/v1/chat`.
 > See [ROADMAP.md](ROADMAP.md) for progress.
 
 ## What it will do
@@ -181,7 +181,14 @@ finds paraphrases, keyword search finds exact terms such as `EASYRAG_WATCH_FORCE
 `v1.5` or an error code, and the two rankings are merged. Pass `"mode": "vector"`,
 `"keyword"` or `"hybrid"` to compare them. Each result shows `vector_score` and
 `keyword_score`. `score` is the ranking score of the mode used, so only compare it within
-one mode. Errors always have the shape
+one mode.
+
+**Optional reranking.** `EASYRAG_RERANK_ENABLED=true` adds a small cross-encoder that
+re-scores the best 20 candidates and keeps the top 5. It runs on CPU, adds roughly 1 s per
+question, and downloads about 80 MB once (no telemetry). It's off by default because it
+showed no measurable gain over hybrid retrieval on the project's test questions. Try it on
+your own documents with `"rerank": true` on `/api/v1/retrieve`. If the model isn't ready,
+answers still work, just without reranking. Errors always have the shape
 `{"error": {"code": "...", "message": "..."}}`.
 
 The API is published on `127.0.0.1` only. Set `EASYRAG_PORT` in `.env` to change the host port.

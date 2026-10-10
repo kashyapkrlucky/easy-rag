@@ -39,6 +39,8 @@ def create_app(
             container.indexing.start_until_success()
         if resolved.watch_enabled:
             container.watcher.start()
+        if resolved.rerank_enabled:
+            container.reranker.start_loading()
         try:
             yield
         finally:

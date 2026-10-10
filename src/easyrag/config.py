@@ -66,6 +66,15 @@ class Settings(BaseSettings):
     # are model-specific and must be calibrated on your documents (ARCHITECTURE D12).
     retrieval_min_score: float | None = Field(default=None, ge=-1.0, le=1.0)
 
+    # --- Reranking ----------------------------------------------------------------------
+    # A cross-encoder reorders the best `rerank_candidates` retrieval results and keeps
+    # `retrieval_top_k` (ARCHITECTURE D33). The model is downloaded once into
+    # `model_cache_dir`, then used offline.
+    rerank_enabled: bool = False
+    rerank_model: str = Field(default="Xenova/ms-marco-MiniLM-L-6-v2", min_length=1)
+    rerank_candidates: int = Field(default=20, ge=1, le=50)
+    model_cache_dir: Path = Path(".cache/easyrag/models")
+
     # --- Ollama ------------------------------------------------------------------------
     # Docker Compose sets http://ollama:11434; the default suits `uv run` with a host Ollama.
     ollama_base_url: AnyHttpUrl = AnyHttpUrl("http://localhost:11434")

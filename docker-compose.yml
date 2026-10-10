@@ -12,9 +12,17 @@ services:
       # Point at the host's Ollama instead with http://host.docker.internal:11434
       EASYRAG_OLLAMA_BASE_URL: ${EASYRAG_OLLAMA_BASE_URL:-http://ollama:11434}
       EASYRAG_DOCS_DIR: /data/docs
+      EASYRAG_MODEL_CACHE_DIR: /data/models
+      # Model libraries write caches and logs under their "home"; the root filesystem is
+      # read-only, so point them at the models volume. And no telemetry (local-first).
+      HF_HOME: /data/models/huggingface
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      ORT_DISABLE_TELEMETRY: "1"
     volumes:
       # Your Markdown documents, mounted read-only.
       - ${EASYRAG_DOCS_HOST_DIR:-./docs}:/data/docs:ro
+      # Downloaded reranker model (once; then used offline).
+      - models:/data/models
     ports:
       # Published on localhost only: the API has no authentication until it is added.
       - "127.0.0.1:${EASYRAG_PORT:-8000}:8000"
@@ -79,3 +87,4 @@ services:
 volumes:
   pgdata:
   ollama:
+  models:

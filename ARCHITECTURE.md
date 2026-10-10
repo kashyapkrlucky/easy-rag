@@ -140,6 +140,8 @@ easy-rag/
 │   ├── __init__.py                   (P1)
 │   ├── main.py                       (P1)  app factory + lifespan
 │   ├── config.py                     (P1)  Settings (pydantic-settings)
+│   ├── watcher.py                    (P16, moved P18) watchfiles events → coalesced run requests
+│   ├── rerankers/fastembed.py        (P18) ONNX cross-encoder adapter
 │   ├── ollama.py                     (P12) shared Ollama HTTP: retries, errors, /api/show
 │   ├── tokens.py                     (P6)  deterministic token estimate
 │   ├── container.py                  (P3)  composition root: builds adapters/services
@@ -162,8 +164,7 @@ easy-rag/
 │   │   ├── markdown.py               (P5)
 │   │   ├── chunker.py                (P6)
 │   │   ├── indexer.py                (P9, incremental in P15)
-│   │   ├── coordinator.py            (P15) background runs, startup retries, status
-│   │   └── watcher.py                (P16) watchfiles events → coalesced run requests
+│   │   └── coordinator.py            (P15) background runs, startup retries, status
 │   ├── embeddings/
 │   │   ├── base.py                   (P7)  EmbeddingProvider Protocol
 │   │   ├── fake.py                   (P7)  deterministic test provider
@@ -181,7 +182,7 @@ easy-rag/
 │   │   ├── vector.py                 (P10)
 │   │   ├── keyword.py                (P17) term extraction (identifiers as phrases)
 │   │   ├── hybrid.py                 (P17) reciprocal rank fusion (k = 60)
-│   │   └── rerank.py                 (P18)
+│   │   └── rerank.py                 (P18) Reranker port, RerankingRetriever (graceful fallback)
 │   ├── llm/
 │   │   ├── base.py                   (P11) LLMProvider Protocol
 │   │   ├── fake.py                   (P11)
@@ -661,6 +662,8 @@ Elasticsearch or OpenSearch.
 **D16 — Reranker is an optional port with a no-op default.** Candidates are evaluated
 in Phase 18: an ONNX cross-encoder (light, no PyTorch) vs. an LLM-based reranker via the
 existing `LLMProvider`. We will not ship a multi-gigabyte PyTorch image.
+*Resolved in Phase 18:* an ONNX cross-encoder via `fastembed` (D33). LLM reranking was
+ruled out: on CPU, scoring 20 candidates with the 1.5B model would add tens of seconds.
 
 **D17 — Migrations run before the server starts.** The container entrypoint
 (`docker/entrypoint.sh`) runs `python -m easyrag.storage.migrate` (Alembic `upgrade head`) and
@@ -706,7 +709,7 @@ host-Ollama setup first-class.
 debouncing. Bind-mounted volumes on Docker Desktop don't always deliver native file
 events reliably, so polling can be forced via config. A periodic full re-sync is the
 safety net, and because indexing is idempotent (D10), it's cheap.
-*Implemented in Phase 16* (`ingestion/watcher.py`):
+*Implemented in Phase 16* (`easyrag/watcher.py`; moved out of `ingestion/` in Phase 18, see D33):
 - **The watcher only requests runs.** It calls `IndexingCoordinator.request_run()`, which
   **coalesces**: if a run is in progress, exactly one follow-up runs after it, however many
   requests arrive. A 12-file burst (like a `git pull`) produced **one** index run live.
@@ -949,6 +952,49 @@ numbers must match.
   "How do I deploy the application with Docker?" as API examples, so lexical search
   rightly ranks those above the real deployment guide. Phase 19 must evaluate on a corpus
   free of such text, and re-check the default mode there.
+
+**D33 — Optional cross-encoder reranking (Phase 18).**
+- **Design:** `RerankingRetriever` wraps any retriever (vector, keyword or hybrid). It
+  fetches `EASYRAG_RERANK_CANDIDATES` (20), reranks them with a `Reranker`, and keeps
+  `top_k`. A cross-encoder reads query and chunk *together*, which is more precise than
+  comparing separately computed embeddings, but too slow to run over the whole corpus.
+  The reranker sees the same contextual header the chunk was embedded with.
+  `rerank_score = sigmoid(logit)`; component scores are kept. `/api/v1/retrieve` accepts
+  `rerank: true|false` per request.
+- **Adapter** (`rerankers/fastembed.py`): `Xenova/ms-marco-MiniLM-L-6-v2` (80 MB,
+  Apache-2.0). It's loaded in the background at startup, onnxruntime is imported lazily so
+  startup and tests stay fast, and inference runs in a worker thread. Readiness reports
+  `reranker: missing` while the model downloads, `unavailable` on failure.
+- **Graceful degradation:** a reranker that isn't ready, or fails, falls back to the
+  retrieval order with a warning. It never fails a request (verified live in Docker).
+- **Local-first in Docker** (found by testing in the container, not assumed):
+  - The model libraries write caches and logs under `$HOME`, which is on the **read-only**
+    root filesystem, so the first container run failed to download the model.
+    `HF_HOME` now points into the persistent `models` volume. The model downloads once
+    (88 MB) and is then used offline.
+  - **onnxruntime attempts its own telemetry** (it logged "Failed to persist telemetry
+    device ID"). It's now disabled explicitly (`ORT_DISABLE_TELEMETRY=1` and
+    `onnxruntime.disable_telemetry_events()`), as is Hugging Face Hub telemetry, both in
+    and out of Docker.
+- **Measured** (same 12 queries as D32, real models):
+
+  | Configuration | hit@1 | hit@3 | MRR@5 | Median latency |
+  |---|---|---|---|---|
+  | hybrid | 0.75 | 1.00 | 0.86 | 45 ms |
+  | hybrid + rerank | 0.75 | 1.00 | 0.86 | 1.3 s |
+  | vector | 0.67 | 1.00 | 0.83 | 37 ms |
+  | vector + rerank | 0.75 | 1.00 | 0.86 | 1.3 s |
+
+  Reranking lifts vector-only to hybrid's level, but adds nothing measurable on top of
+  hybrid here. The set is saturated (hit@3 = 1.00 everywhere) and contaminated (D32), so
+  it can't show precision gains.
+- **Default: off** (`EASYRAG_RERANK_ENABLED=false`). A stage that adds about 1.3 s, about
+  200 MB of RAM and a model download must earn its place with evidence. That's the same
+  principle as the similarity threshold (D12). Phase 19 re-evaluates it on a proper dataset.
+- **Layering fix found along the way:** adding the model and file-event libraries to the
+  architecture test's infrastructure list exposed that the Phase 16 watcher sat in
+  `ingestion/` while importing `watchfiles`. It's an event-source adapter, so it moved to
+  `easyrag/watcher.py` rather than weakening the rule.
 ---
 
 ## 10. API surface (target)
@@ -1004,6 +1050,8 @@ Chat contract (target):
 | `EASYRAG_EMBEDDING_BATCH_SIZE` | `32` | 8 |
 | `EASYRAG_EMBEDDING_QUERY_PREFIX` / `_DOCUMENT_PREFIX` | `"search_query: "` / `"search_document: "` | 8 |
 | `EASYRAG_RETRIEVAL_MODE` | `hybrid` (`vector` / `keyword`) | 17 |
+| `EASYRAG_RERANK_ENABLED` / `_MODEL` / `_CANDIDATES` | `false` / `Xenova/ms-marco-MiniLM-L-6-v2` / `20` | 18 |
+| `EASYRAG_MODEL_CACHE_DIR` | `.cache/easyrag/models` (Compose: `/data/models` volume) | 18 |
 | `EASYRAG_RETRIEVAL_TOP_K` | `5` (1–50; requests may override) | 10 |
 | `EASYRAG_RETRIEVAL_MIN_SCORE` | unset (off; requests may override) | 10 / 14 |
 | `EASYRAG_LLM_MODEL` / `_CONTEXT_WINDOW` | `qwen2.5:1.5b-instruct-q4_K_M` / `8192` | 12 |
@@ -1054,5 +1102,5 @@ The deterministic `FakeEmbeddingProvider` (hash-seeded vectors) and the scripted
 | ~~Default embedding model and dimension~~ → `nomic-embed-text:v1.5`, 768: 274 MB, fast on CPU, 8192-token context, documented prefixes; English-centric (alternatives in `.env.example`) | 8 ✅ |
 | ~~Default chat model~~ → `qwen2.5:1.5b-instruct-q4_K_M` (~1 GB, Apache-2.0, no thinking mode). Chosen for a 4 GB Docker VM; see D28 | 12 ✅ |
 | Similarity threshold default per model | 19 |
-| Reranker implementation (ONNX cross-encoder vs. LLM rerank) | 18 |
+| ~~Reranker implementation~~ → ONNX cross-encoder (`ms-marco-MiniLM-L-6-v2` via fastembed), off by default until evaluation shows a gain (D33) | 18 ✅ |
 | API key optional vs. required when binding to non-localhost | 22 |

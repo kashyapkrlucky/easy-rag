@@ -79,6 +79,7 @@ def test_returns_results_in_api_shape(make_settings: SettingsFactory) -> None:
             "score": 0.831235,
             "vector_score": None,
             "keyword_score": None,
+            "rerank_score": None,
             "content": "Run docker compose up.",
         }
     ]

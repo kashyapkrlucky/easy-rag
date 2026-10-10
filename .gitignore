@@ -21,6 +21,9 @@ htmlcov/
 # User document corpus (mounted into the container, never committed)
 /docs/
 
+# Downloaded models (reranker) when running outside Docker
+.cache/
+
 # Evaluation output
 /eval/reports/
 

@@ -19,20 +19,22 @@ from easyrag.ingestion.coordinator import IndexingCoordinator
 from easyrag.ingestion.indexer import Indexer
 from easyrag.ingestion.loader import FilesystemMarkdownLoader
 from easyrag.ingestion.markdown import MarkdownParser
-from easyrag.ingestion.watcher import DocsWatcher
 from easyrag.llm.base import GenerationOptions, LLMProvider
 from easyrag.llm.ollama import OllamaLLMProvider
 from easyrag.rag.prompt import PromptBuilder
 from easyrag.rag.service import RagService
+from easyrag.rerankers.fastembed import FastEmbedReranker
 from easyrag.retrieval.base import Retriever
 from easyrag.retrieval.hybrid import HybridRetriever
 from easyrag.retrieval.keyword import KeywordRetriever
+from easyrag.retrieval.rerank import RerankingRetriever
 from easyrag.retrieval.vector import VectorRetriever
 from easyrag.storage.database import create_engine, ping
 from easyrag.storage.index_store import PostgresIndexStore
 from easyrag.storage.keyword_store import PostgresKeywordStore
 from easyrag.storage.migrate import SchemaStatus, schema_status
 from easyrag.storage.vector_store import PostgresVectorStore
+from easyrag.watcher import DocsWatcher
 
 # Connecting should be fast even when a request (model load + inference) is slow.
 _OLLAMA_CONNECT_TIMEOUT_SECONDS = 5.0
@@ -49,17 +51,28 @@ class AppContainer:
     indexing: IndexingCoordinator
     watcher: DocsWatcher
     index_store: PostgresIndexStore
-    # The configured retriever, and every mode by name (for per-request overrides).
+    # The configured retriever (reranked if enabled), and every base mode by name (for
+    # per-request overrides).
     retriever: Retriever
     retrievers: Mapping[str, Retriever]
+    reranker: FastEmbedReranker
     rag: RagService
     # Reported by /health/ready, in this order.
     readiness_checks: Mapping[str, ReadinessCheck]
+
+    def reranked(self, base: Retriever) -> Retriever:
+        return RerankingRetriever(
+            base=base,
+            reranker=self.reranker,
+            candidates=self.settings.rerank_candidates,
+            default_top_k=self.settings.retrieval_top_k,
+        )
 
     async def aclose(self) -> None:
         # Stop event sources first, then indexing, then the clients indexing uses.
         await self.watcher.aclose()
         await self.indexing.aclose()
+        await self.reranker.aclose()
         await self.http_client.aclose()
         await self.engine.dispose()
 
@@ -118,7 +131,15 @@ def build_container(settings: Settings) -> AppContainer:
             vector=vector, keyword=keyword, default_top_k=settings.retrieval_top_k
         ),
     }
-    retriever = retrievers[settings.retrieval_mode]
+    reranker = FastEmbedReranker(settings.rerank_model, settings.model_cache_dir)
+    retriever: Retriever = retrievers[settings.retrieval_mode]
+    if settings.rerank_enabled:
+        retriever = RerankingRetriever(
+            base=retriever,
+            reranker=reranker,
+            candidates=settings.rerank_candidates,
+            default_top_k=settings.retrieval_top_k,
+        )
 
     rag = RagService(
         retriever=retriever,
@@ -167,6 +188,7 @@ def build_container(settings: Settings) -> AppContainer:
         index_store=index_store,
         retriever=retriever,
         retrievers=retrievers,
+        reranker=reranker,
         rag=rag,
         readiness_checks={
             "database": database,
@@ -174,5 +196,6 @@ def build_container(settings: Settings) -> AppContainer:
             "embedding_model": embeddings.readiness,
             "llm_model": llm.readiness,
             "index": index,
+            **({"reranker": reranker.readiness} if settings.rerank_enabled else {}),
         },
     )
