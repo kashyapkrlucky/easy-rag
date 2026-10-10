@@ -4,7 +4,7 @@ A self-hosted, local-first Retrieval-Augmented Generation system for your Markdo
 documents. It runs entirely on your machine — Python, FastAPI, PostgreSQL + pgvector and
 Ollama — with no external SaaS.
 
-> **Status: Phase 22 — API key authentication.** Optional API key, CORS and request size limits on top of full pipeline observability. Measured baseline: 77% of answerable questions answered correctly with citations, 88% of unanswerable ones refused (`easyrag eval`). Prompt injection is not yet defended.
+> **Status: Phase 23 — web UI.** A chat page at http://localhost:8000 with clickable sources, on top of the API, authentication and observability. Measured baseline: 77% of answerable questions answered correctly with citations, 88% of unanswerable ones refused (`easyrag eval`). Prompt injection is not yet defended.
 > See [ROADMAP.md](ROADMAP.md) for progress.
 
 ## What it will do
@@ -115,6 +115,12 @@ CLI exit codes: `0` success, `1` some documents failed, `2` configuration proble
 
 ### Asking questions
 
+**In the browser:** open http://localhost:8000. Click a citation such as **[1]** to read the
+exact section the answer is based on. If you set an API key, the page asks for it once per
+tab. Set `EASYRAG_UI_ENABLED=false` to serve the API only.
+
+**From the command line:**
+
 ```bash
 curl -s localhost:8000/api/v1/chat -H 'Content-Type: application/json' \
   -d '{"question": "How do I deploy the application with Docker?"}'
@@ -129,7 +135,8 @@ curl -s localhost:8000/api/v1/chat -H 'Content-Type: application/json' \
   "sources": [
     {"document": "support.md", "title": "Support", "section": "Contact",
      "heading_path": ["Support", "Contact"], "anchor": "contact",
-     "lines": [5, 5], "score": 0.71, "chunk_id": "…"}
+     "lines": [5, 5], "score": 0.71, "chunk_id": "…",
+     "content": "Email support@example.com. We answer within one business day."}
   ]
 }
 ```
@@ -214,7 +221,8 @@ curl -s localhost:8000/api/v1/documents -H "X-API-Key: $EASYRAG_API_KEY"
 ```
 
 - **Everything requires the key**, including `/metrics`. The exceptions are the health
-  probes (`/health/live`, `/health/ready`) and the API docs (`/docs`, `/openapi.json`).
+  probes (`/health/live`, `/health/ready`), the API docs (`/docs`, `/openapi.json`) and the
+  web page itself, which holds no data and asks for the key.
   Requests without a valid key get `401 unauthorized`.
 - **Prometheus:** set `authorization: {credentials: <key>}` in the scrape config.
 - **Request bodies over 64 KiB are rejected** with `413` (`EASYRAG_MAX_REQUEST_BYTES`).
@@ -248,6 +256,9 @@ uv run ruff check .
 uv run mypy
 uv run pytest                                       # unit tests; integration tests skip
 ```
+
+The web UI's JavaScript tests run inside `pytest` when [Node.js](https://nodejs.org) is
+installed (`node --test tests/web/render.test.mjs` runs them directly). Without Node they're skipped.
 
 Integration tests run against the development database when `EASYRAG_TEST_DATABASE_URL` is set,
 and end-to-end tests against a real Ollama when `EASYRAG_TEST_OLLAMA_URL` is set:

@@ -97,6 +97,7 @@ def test_chat_returns_answer_and_sources(make_settings: SettingsFactory) -> None
                 "lines": [10, 12],
                 "score": 0.742123,
                 "chunk_id": "c" * 32,
+                "content": "Run docker compose up.",
             }
         ],
     }

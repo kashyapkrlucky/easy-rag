@@ -78,6 +78,8 @@ class Settings(BaseSettings):
     ] = []
     # Larger request bodies are rejected with 413. Questions are at most 2000 characters.
     max_request_bytes: int = Field(default=65536, ge=1024, le=10 * 1024 * 1024)
+    # Serve the chat page at / (static files, no build step). Off for API-only deployments.
+    ui_enabled: bool = True
 
     # --- Documents and chunking ------------------------------------------------------
     # Directory of Markdown files to index. Docker Compose mounts it at /data/docs.

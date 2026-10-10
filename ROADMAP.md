@@ -208,6 +208,8 @@ Decision references (D1–D24) point to [ARCHITECTURE.md §9](ARCHITECTURE.md#9-
 
 ### Phase 23 — Minimal web UI
 - **Objective:** static HTML + vanilla JS chat page with clickable sources, served by FastAPI. (D24)
+- **Done:** `web/index.html`, `web/assets/{app.js, render.js, style.css}` served at `/` and `/assets/*`; chat sources include `content`; `SecurityHeadersMiddleware` (strict CSP on the UI, `nosniff` / `no-referrer` / frame-deny everywhere); UI public under API-key auth, with a key dialog and `sessionStorage`; readiness banner, index size, elapsed timer, stop, refusal, unverified and error states with request ID, trace summary line, dark mode, phone layout; `EASYRAG_UI_ENABLED` (D37). Tests: 12 Node tests for rendering (citations, code spans, stray backticks, markup stays text, labels, notices, errors, trace, readiness) run from pytest; 14 Python tests (serving, headers, auth, traversal, disabled UI, no third-party or inline script, no HTML sinks, single submit button). Wheel verified to contain the files. Live in the browser, against a scripted server: key prompt and retry, citations open their excerpts, `<script>` in a document shows as text, refusal and error states, no CSP violations, no horizontal scroll at 375 px in dark mode. One bug found live and fixed: Enter in the key dialog submitted Cancel.
+- **Status:** ✅ done
 - **Commit:** `feat: add minimal web UI`
 
 ### Phase 24 — End-user Docker Compose

@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>EasyRAG</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/assets/style.css" />
+    <script type="module" src="/assets/app.js"></script>
+  </head>
+  <body>
+    <header class="top">
+      <div class="brand">
+        <h1>EasyRAG</h1>
+        <span id="index-info" class="index-info" aria-live="polite"></span>
+      </div>
+      <button id="key-button" type="button" class="link" hidden>Enter API key</button>
+    </header>
+
+    <div id="banner" class="banner" role="status" hidden></div>
+
+    <main>
+      <section id="conversation" class="conversation" aria-live="polite" aria-busy="false">
+        <div class="intro">
+          <p>Ask a question about your documents. Answers come only from them, and every
+            claim links to the section it is based on: click <span class="cite-sample">[1]</span>
+            to read it.</p>
+          <p class="hint">Each question is answered on its own; earlier questions are not
+            remembered.</p>
+        </div>
+      </section>
+    </main>
+
+    <form id="ask" class="ask">
+      <label for="question" class="visually-hidden">Your question</label>
+      <textarea id="question" name="question" rows="2" maxlength="2000" required
+        placeholder="Ask about your documents…"
+        title="Enter to send, Shift+Enter for a new line"></textarea>
+      <div class="actions">
+        <button id="stop" type="button" class="secondary" hidden>Stop</button>
+        <button id="submit" type="submit">Ask</button>
+      </div>
+    </form>
+
+    <dialog id="key-dialog" aria-labelledby="key-title">
+      <form method="dialog">
+        <h2 id="key-title">API key required</h2>
+        <p>This EasyRAG server requires an API key (<code>EASYRAG_API_KEY</code>). It is kept
+          only in this browser tab.</p>
+        <p id="key-error" class="key-error" role="alert"></p>
+        <label for="key-input">API key</label>
+        <input id="key-input" type="password" autocomplete="off" spellcheck="false" />
+        <div class="actions">
+          <!-- Not a submit button: Enter in the field must submit "save", not "cancel". -->
+          <button id="key-cancel" type="button" class="secondary">Cancel</button>
+          <button value="save">Save</button>
+        </div>
+      </form>
+    </dialog>
+  </body>
+</html>

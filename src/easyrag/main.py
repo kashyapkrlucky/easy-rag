@@ -13,8 +13,12 @@ from fastapi.security import APIKeyHeader, HTTPBearer
 
 from easyrag import __version__
 from easyrag.api.errors import register_error_handlers
-from easyrag.api.middleware import ApiKeyMiddleware, BodySizeLimitMiddleware
-from easyrag.api.routes import chat, health, index, metrics, retrieve
+from easyrag.api.middleware import (
+    ApiKeyMiddleware,
+    BodySizeLimitMiddleware,
+    SecurityHeadersMiddleware,
+)
+from easyrag.api.routes import chat, health, index, metrics, retrieve, ui
 from easyrag.config import Settings
 from easyrag.container import ContainerFactory, build_container
 from easyrag.observability.logging import configure_logging
@@ -69,8 +73,13 @@ def create_app(
         container = getattr(app.state, "container", None)
         return container.metrics if container is not None else None
 
+    # The UI page and assets are public: they hold no data, and the API calls they make
+    # need the key like any other client's.
+    ui_paths = frozenset({"/"}) if resolved.ui_enabled else frozenset[str]()
+    ui_prefixes = (ui.ASSETS_PATH + "/",) if resolved.ui_enabled else ()
+
     # add_middleware wraps: the last one added runs first. Order of execution:
-    # request context -> CORS -> API key -> body size limit -> routes.
+    # request context -> security headers -> CORS -> API key -> body size limit -> routes.
     app.add_middleware(
         BodySizeLimitMiddleware, max_bytes=resolved.max_request_bytes, metrics=current_metrics
     )
@@ -79,7 +88,8 @@ def create_app(
         app.add_middleware(
             ApiKeyMiddleware,
             api_key=resolved.api_key.get_secret_value(),
-            public_paths=frozenset(path for path in public if path),
+            public_paths=frozenset(path for path in public if path) | ui_paths,
+            public_prefixes=ui_prefixes,
             metrics=current_metrics,
         )
     if resolved.cors_allow_origins:
@@ -91,6 +101,7 @@ def create_app(
             allow_headers=["Authorization", "Content-Type", "X-API-Key", "X-Request-ID"],
             expose_headers=["X-Request-ID"],
         )
+    app.add_middleware(SecurityHeadersMiddleware, ui_paths=ui_paths, ui_prefixes=ui_prefixes)
     app.add_middleware(RequestContextMiddleware, metrics=current_metrics)
     register_error_handlers(app)
 
@@ -100,4 +111,7 @@ def create_app(
     app.include_router(chat.router, dependencies=protected)
     app.include_router(index.router, dependencies=protected)
     app.include_router(metrics.router)
+    if resolved.ui_enabled:
+        app.include_router(ui.router)
+        app.mount(ui.ASSETS_PATH, ui.assets(), name="assets")
     return app

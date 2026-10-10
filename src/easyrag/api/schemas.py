@@ -92,6 +92,7 @@ class SourceResponse(BaseModel):
     lines: tuple[int, int] = Field(description="1-based, inclusive line range in the document")
     score: float = Field(description="Retrieval ranking score (see /retrieve)")
     chunk_id: str
+    content: str = Field(description="The section text the answer is based on (verbatim)")
 
     @classmethod
     def from_domain(cls, chunk: RetrievedChunk) -> "SourceResponse":
@@ -104,6 +105,7 @@ class SourceResponse(BaseModel):
             lines=(chunk.start_line, chunk.end_line),
             score=round(chunk.score, 6),
             chunk_id=chunk.chunk_id,
+            content=chunk.content,
         )
 
 

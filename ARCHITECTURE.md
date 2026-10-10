@@ -1117,15 +1117,45 @@ numbers must match.
   - Added in this phase: uvicorn no longer sends a `server` header.
   - Deferred to Phase 25: a concurrency limit on `/chat` (CPU generation queues up), and
     rate limiting.
+
+**D37 — The web UI (Phase 23).** This implements D24.
+- **Three static files shipped in the package:** `web/index.html` and
+  `web/assets/{app.js, render.js, style.css}`. They're served at `/` and `/assets/*`, with
+  no npm, bundler or CDN, and the wheel and Docker image carry them automatically.
+  `EASYRAG_UI_ENABLED=false` turns them off for API-only deployments.
+- **Sources carry their text** (`content` on each chat source). Clicking `[n]` opens the
+  exact evidence without a second request, and without racing a re-index that would change
+  chunk ids. The size is bounded by the context budget. The debug trace stays text-free.
+- **Model output is never HTML.** `render.js` turns answer text into segments (text,
+  inline code, citation), and `app.js` builds DOM nodes with `textContent`. Only valid
+  `[n]` markers become buttons, and markers inside code stay literal. A strict CSP on the
+  UI paths (`default-src 'none'`, `script-src 'self'`, no inline script or style,
+  `frame-ancestors 'none'`) is the second layer. A prompt-injected document (D34) can't
+  run script in the page. Tests forbid HTML sinks (`innerHTML`, `eval`, …) in the scripts.
+  `SecurityHeadersMiddleware` also adds `nosniff`, `no-referrer` and `X-Frame-Options:
+  DENY` to every response. The CSP is limited to the UI because `/docs` loads Swagger UI
+  from a CDN.
+- **Authentication:** the page and its assets are public, because they hold no data. A 401
+  from the API opens a key dialog. The key is kept in `sessionStorage` (this tab only) and
+  sent as `X-API-Key`. There are no cookies, hence no CSRF.
+- **Single-turn by design:** earlier Q&As stay on screen but aren't sent back, matching the
+  API. The page says so.
+- **Testing:** the rendering logic is pure ES-module code, tested with `node --test`
+  (`tests/web/`, run from pytest and skipped without Node). Python tests cover serving,
+  headers, auth interplay, path traversal, disabling the UI, and static rules (no
+  third-party URLs, no inline script, one submit button in the key dialog). A live check
+  in a browser found the Enter-submits-Cancel bug that the last rule now guards against.
 ---
 
 ## 10. API surface (target)
 
 *With `EASYRAG_API_KEY` set, every path except `/health/*`, `/docs`, `/redoc` and
-`/openapi.json` requires the key (D36). Errors: 401 `unauthorized`, 413 `payload_too_large`.*
+`/openapi.json` and the web UI (`/`, `/assets/*`) requires the key (D36). Errors: 401
+`unauthorized`, 413 `payload_too_large`.*
 
 | Method & path | Phase | Purpose |
 |---|---|---|
+| `GET /` | 23 ✅ | Web UI: chat page with clickable citations (D37) |
 | `GET /health/live` | 1 | Liveness |
 | `GET /health/ready` | 3 (extended 8, 12) | Readiness: DB, migrations, model provider |
 | `POST /api/v1/retrieve` | 10, 17 ✅ | Retrieval only (debugging, evaluation); optional `mode` (vector / keyword / hybrid) |
@@ -1190,6 +1220,7 @@ Chat contract (target):
 | `EASYRAG_API_KEY` | unset (auth off; at least 16 characters) | 22 |
 | `EASYRAG_CORS_ALLOW_ORIGINS` | empty (CORS off; comma-separated origins) | 22 |
 | `EASYRAG_MAX_REQUEST_BYTES` | `65536` | 22 |
+| `EASYRAG_UI_ENABLED` | `true` | 23 |
 
 The exact model defaults are chosen and justified in Phases 8 and 12.
 
