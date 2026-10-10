@@ -4,7 +4,7 @@ A self-hosted, local-first Retrieval-Augmented Generation system for your Markdo
 documents. It runs entirely on your machine — Python, FastAPI, PostgreSQL + pgvector and
 Ollama — with no external SaaS.
 
-> **Status: Phase 21 — RAG pipeline observability.** JSON logs with request IDs, Prometheus `/metrics` covering every pipeline stage, and an optional debug trace per answer. Measured baseline: 77% of answerable questions answered correctly with citations, 88% of unanswerable ones refused (`easyrag eval`). Prompt injection is not yet defended.
+> **Status: Phase 22 — API key authentication.** Optional API key, CORS and request size limits on top of full pipeline observability. Measured baseline: 77% of answerable questions answered correctly with citations, 88% of unanswerable ones refused (`easyrag eval`). Prompt injection is not yet defended.
 > See [ROADMAP.md](ROADMAP.md) for progress.
 
 ## What it will do
@@ -193,6 +193,34 @@ answers still work, just without reranking. Errors always have the shape
 
 The API is published on `127.0.0.1` only. Set `EASYRAG_PORT` in `.env` to change the host port.
 PostgreSQL is not published to the host.
+
+## Security
+
+By default the API has no authentication and is reachable only from your own machine.
+**Before you make it reachable from other machines, set an API key**, and put a reverse
+proxy with TLS in front of it (the key travels in a request header):
+
+```bash
+echo "EASYRAG_API_KEY=$(openssl rand -hex 32)" >> .env
+docker compose up -d
+```
+
+Then send the key with every request, as either header:
+
+```bash
+curl -s localhost:8000/api/v1/chat -H "Authorization: Bearer $EASYRAG_API_KEY" \
+  -H 'Content-Type: application/json' -d '{"question": "..."}'
+curl -s localhost:8000/api/v1/documents -H "X-API-Key: $EASYRAG_API_KEY"
+```
+
+- **Everything requires the key**, including `/metrics`. The exceptions are the health
+  probes (`/health/live`, `/health/ready`) and the API docs (`/docs`, `/openapi.json`).
+  Requests without a valid key get `401 unauthorized`.
+- **Prometheus:** set `authorization: {credentials: <key>}` in the scrape config.
+- **Request bodies over 64 KiB are rejected** with `413` (`EASYRAG_MAX_REQUEST_BYTES`).
+- **Browser apps on other sites** need their origin listed in
+  `EASYRAG_CORS_ALLOW_ORIGINS` (comma-separated). CORS is off by default.
+- Without a key, the app logs a warning at startup.
 
 ## Development
 

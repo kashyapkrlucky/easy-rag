@@ -5,17 +5,41 @@ for local development, from a ``.env`` file). This is the only module that reads
 the environment; everything else receives a ``Settings`` instance.
 """
 
+import re
 from pathlib import Path
 from typing import Annotated, Literal
 
-from pydantic import AnyHttpUrl, BeforeValidator, Field, SecretStr, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import AfterValidator, AnyHttpUrl, BeforeValidator, Field, SecretStr, model_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 
 
 def _upper(value: object) -> object:
     return value.upper() if isinstance(value, str) else value
+
+
+def _blank_to_none(value: object) -> object:
+    # `EASYRAG_API_KEY=` (as in a copied .env.example) means "not set".
+    return None if isinstance(value, str) and not value.strip() else value
+
+
+def _split_commas(value: object) -> object:
+    if isinstance(value, str):
+        return [item.strip() for item in value.split(",") if item.strip()]
+    return value
+
+
+_ORIGIN = re.compile(r"https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?|\*")
+
+
+def _valid_origins(origins: list[str]) -> list[str]:
+    for origin in origins:
+        if not _ORIGIN.fullmatch(origin):
+            raise ValueError(
+                f"invalid CORS origin {origin!r}: use scheme://host[:port] (no path) or *"
+            )
+    return origins
 
 
 class Settings(BaseSettings):
@@ -39,6 +63,21 @@ class Settings(BaseSettings):
 
     # Upper bound for each dependency check performed by /health/ready.
     health_check_timeout_seconds: float = Field(default=2.0, gt=0, le=30)
+
+    # --- HTTP API ------------------------------------------------------------------------
+    # When set, every endpoint except the health probes and the API schema requires it, as
+    # "Authorization: Bearer <key>" or "X-API-Key: <key>". Unset, the API is
+    # unauthenticated: keep it on localhost (the Docker Compose default).
+    api_key: Annotated[SecretStr | None, BeforeValidator(_blank_to_none)] = Field(
+        default=None, min_length=16
+    )
+    # Browser origins allowed to call the API from another site (comma-separated, e.g.
+    # "https://wiki.example.com"); empty disables CORS. Not needed for same-origin use.
+    cors_allow_origins: Annotated[
+        list[str], NoDecode, BeforeValidator(_split_commas), AfterValidator(_valid_origins)
+    ] = []
+    # Larger request bodies are rejected with 413. Questions are at most 2000 characters.
+    max_request_bytes: int = Field(default=65536, ge=1024, le=10 * 1024 * 1024)
 
     # --- Documents and chunking ------------------------------------------------------
     # Directory of Markdown files to index. Docker Compose mounts it at /data/docs.

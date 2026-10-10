@@ -24,7 +24,8 @@ services:
       # Downloaded reranker model (once; then used offline).
       - models:/data/models
     ports:
-      # Published on localhost only: the API has no authentication until it is added.
+      # Published on localhost only. Before publishing it more widely, set EASYRAG_API_KEY
+      # in .env, and put a TLS-terminating reverse proxy in front.
       - "127.0.0.1:${EASYRAG_PORT:-8000}:8000"
     # Not waiting for ollama-pull on purpose: the API starts even if the model download
     # is slow or impossible (offline); /health/ready reports the model as "missing".

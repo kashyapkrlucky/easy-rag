@@ -202,6 +202,8 @@ Decision references (D1–D24) point to [ARCHITECTURE.md §9](ARCHITECTURE.md#9-
 
 ### Phase 22 — Authentication and self-hosting config
 - **Objective:** optional API key (constant-time compare), CORS config, request size limits, safe-defaults review.
+- **Done:** `api/middleware.py` (`ApiKeyMiddleware`, deny by default with a public allowlist of probes and the API schema; `BodySizeLimitMiddleware`, buffered so chunked bodies are covered), optional CORS, `EASYRAG_API_KEY` / `_CORS_ALLOW_ORIGINS` / `_MAX_REQUEST_BYTES` (validated), OpenAPI security schemes, a startup warning without a key, uvicorn `--no-server-header` (D36). Tests: missing, wrong, truncated and extended keys, wrong scheme; both headers, case-insensitive scheme; rejection before body validation; all other paths (incl. `/metrics` and unknown routes) protected; probes and schema public; rejections counted; body limit by declared length and by chunked stream, with the body intact below the limit; CORS off by default, allowed versus denied origin, CORS headers on 401; settings validation and secrecy; two mutation checks (middleware order, chunk counting). Live with uvicorn: 401 / 200 / 413 (plain and chunked), no `server` header, the key never in the logs. Deferred to Phase 25: a `/chat` concurrency limit and rate limiting.
+- **Status:** ✅ done
 - **Commit:** `feat: add API key authentication`
 
 ### Phase 23 — Minimal web UI

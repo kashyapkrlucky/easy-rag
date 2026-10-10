@@ -779,8 +779,8 @@ FastAPI. Node, bundlers and SPA frameworks are not needed for a chat box and a s
 non-dev dependencies into `/app/.venv`; the runtime stage contains only that venv (no uv,
 no compilers, no tests). The container runs as UID 10001 with a read-only root filesystem,
 all capabilities dropped and `no-new-privileges`. uvicorn is PID 1 (exec-form `CMD`), so
-SIGTERM shuts down gracefully. Compose publishes the API on `127.0.0.1` only until
-authentication exists (Phase 22). Later phases needing writable paths add explicit volumes.
+SIGTERM shuts down gracefully. Compose publishes the API on `127.0.0.1` only; set
+`EASYRAG_API_KEY` before publishing it further (D36). Later phases needing writable paths add explicit volumes.
 
 **D26 — Database runtime and credentials (Phase 3).** `pgvector/pgvector:0.8.7-pg18-trixie`
 (PostgreSQL 18, pinned pgvector). `POSTGRES_PASSWORD` has no default: Compose refuses to start
@@ -1079,11 +1079,50 @@ numbers must match.
   fallback.
 - **The debug trace is opt-in per request** (`"debug": true`). It carries ids, scores,
   outcome, attribution, tokens and timings, never document or question text. It's
-  available to every caller while the API is unauthenticated; Phase 22 decides whether to
-  restrict it.
+  available to every caller that is allowed to use the API (D36).
+
+**D36 — Optional API key, CORS and a body size limit (Phase 22).**
+- **Deny by default, enforced in middleware.** With `EASYRAG_API_KEY` set, `ApiKeyMiddleware`
+  rejects every path except an explicit allowlist: `/health/live`, `/health/ready` (probes)
+  and `/docs`, `/redoc`, `/openapi.json` (the schema isn't secret). Routes added later are
+  protected automatically. Requests are rejected before their body is read or validated,
+  so an unauthenticated client can't tell a valid request from an invalid one. The
+  OpenAPI security schemes are documentation only: they make the "Authorize" button work
+  in `/docs`.
+- **One shared key**, as `Authorization: Bearer <key>` (curl, Prometheus) or
+  `X-API-Key: <key>`. It's compared in constant time on SHA-256 digests, so neither the
+  content nor the length leaks. At least 16 characters, validated at startup; an empty
+  value means "off". The key is a `SecretStr` and is never logged. Per-user keys, scopes
+  and rate limits are out of scope for a single-owner, self-hosted tool.
+- **`/metrics` is protected too.** It reveals model names, traffic and corpus size.
+- **Authentication is optional; localhost is the safe default.** Compose publishes the API
+  on `127.0.0.1` only. Without a key, startup logs a warning. Exposing the API beyond
+  localhost needs a key and a TLS-terminating reverse proxy, because the key travels in a
+  header.
+- **CORS is off unless configured.** Exact, validated origins (or `*`), GET and POST only,
+  and no credentials: header authentication needs no cookies, which also rules out CSRF.
+  CORS runs outside authentication, so preflights are answered and a 401 still carries CORS
+  headers that the browser can read.
+- **Body size limit by buffering.** `BodySizeLimitMiddleware` reads the body, up to
+  `EASYRAG_MAX_REQUEST_BYTES` (64 KiB), before the app runs. That covers chunked bodies
+  without `Content-Length`, and the 413 uses the standard error shape. FastAPI would turn
+  an error raised while it reads the body into a generic 400.
+- **Execution order:** request context → CORS → API key → body limit → routes. Rejections
+  still get a request ID, a log line and an `easyrag_api_errors_total{code}` count.
+- **Safe-defaults review:**
+  - Already in place: a non-root, read-only container with all capabilities dropped and
+    `no-new-privileges`; the database and Ollama aren't published; secrets are
+    `SecretStr`; DB and internal errors return generic messages; a pinned image and
+    models; no telemetry.
+  - Added in this phase: uvicorn no longer sends a `server` header.
+  - Deferred to Phase 25: a concurrency limit on `/chat` (CPU generation queues up), and
+    rate limiting.
 ---
 
 ## 10. API surface (target)
+
+*With `EASYRAG_API_KEY` set, every path except `/health/*`, `/docs`, `/redoc` and
+`/openapi.json` requires the key (D36). Errors: 401 `unauthorized`, 413 `payload_too_large`.*
 
 | Method & path | Phase | Purpose |
 |---|---|---|
@@ -1148,7 +1187,9 @@ Chat contract (target):
 | `EASYRAG_INDEX_ON_STARTUP` | `true` | 15 |
 | `EASYRAG_WATCH_ENABLED` / `_FORCE_POLLING` | `true` / `false` | 16 |
 | `EASYRAG_WATCH_DEBOUNCE_MS` / `_RESYNC_SECONDS` | `1000` / `300` (`0` = no resync) | 16 |
-| `EASYRAG_API_KEY` | unset (auth off) | 22 |
+| `EASYRAG_API_KEY` | unset (auth off; at least 16 characters) | 22 |
+| `EASYRAG_CORS_ALLOW_ORIGINS` | empty (CORS off; comma-separated origins) | 22 |
+| `EASYRAG_MAX_REQUEST_BYTES` | `65536` | 22 |
 
 The exact model defaults are chosen and justified in Phases 8 and 12.
 
@@ -1215,7 +1256,8 @@ Phase 21 (RAG pipeline, tokens, retrieval scores, model backend; D35).*
 - **Boundaries:** the indexing coordinator takes `on_report` / `on_failure` observers (with
   failures in an observer logged, never propagated), so `ingestion/` doesn't depend on
   `prometheus_client`. That's enforced by the architecture test.
-- `/metrics` is unauthenticated until Phase 22 and published on `127.0.0.1` only.
+- `/metrics` requires the API key when one is set (D36). Prometheus:
+  `authorization: {credentials: <key>}`.
 
 ---
 
