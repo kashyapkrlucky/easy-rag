@@ -4,7 +4,7 @@ A self-hosted, local-first Retrieval-Augmented Generation system for your Markdo
 documents. It runs entirely on your machine — Python, FastAPI, PostgreSQL + pgvector and
 Ollama — with no external SaaS.
 
-> **Status: Phase 19 — evaluation.** Measured baseline: 77% of answerable questions answered correctly with citations, 88% of unanswerable ones refused (see `easyrag eval`). Prompt injection is not yet defended.
+> **Status: Phase 20 — structured logging and metrics.** JSON logs with request IDs and a Prometheus `/metrics` endpoint. Measured baseline: 77% of answerable questions answered correctly with citations, 88% of unanswerable ones refused (`easyrag eval`). Prompt injection is not yet defended.
 > See [ROADMAP.md](ROADMAP.md) for progress.
 
 ## What it will do
@@ -241,6 +241,23 @@ New migrations go in `src/easyrag/storage/migrations/versions/`. Review autogene
 migrations before committing; the integration suite fails if models and migrations differ.
 
 Configuration is read from `EASYRAG_*` environment variables. See [.env.example](.env.example).
+
+## Logs and metrics
+
+- **Logs** are one JSON object per line. Set `EASYRAG_LOG_FORMAT=text` for readable
+  development logs.
+- **Every response carries an `X-Request-ID` header**, and every log line written while
+  handling that request includes the same `request_id`. Send your own `X-Request-ID` to
+  correlate with other systems.
+- **Questions and document text are never logged at INFO.**
+
+```bash
+docker compose logs app | grep '"request_id": "<id>"'   # everything one request did
+curl -s localhost:8000/metrics                           # Prometheus format
+```
+
+Metrics cover HTTP requests (by route and status), latency, API errors (by code), indexing
+runs, document and chunk changes, and index size.
 
 ## Evaluating quality
 

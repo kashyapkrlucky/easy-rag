@@ -23,11 +23,15 @@ from typing import Any, Literal, Protocol
 
 from easyrag.domain.errors import IndexIncompatibleError
 from easyrag.ingestion.indexer import IndexReport
+from easyrag.observability.context import bound, index_run_id, new_id
 
 logger = logging.getLogger(__name__)
 
 RunState = Literal["idle", "running", "succeeded", "failed"]
 Sleep = Callable[[float], Awaitable[None]]
+# Observers (e.g. metrics); they must not affect indexing, so their errors are logged only.
+OnReport = Callable[[IndexReport], Awaitable[None]]
+OnFailure = Callable[[Exception], None]
 
 
 class IndexRunner(Protocol):
@@ -59,8 +63,12 @@ class IndexingCoordinator:
         initial_retry_seconds: float = 5.0,
         max_retry_seconds: float = 60.0,
         sleep: Sleep = asyncio.sleep,
+        on_report: OnReport | None = None,
+        on_failure: OnFailure | None = None,
     ) -> None:
         self._indexer = indexer
+        self._on_report = on_report
+        self._on_failure = on_failure
         self._initial_retry_seconds = initial_retry_seconds
         self._max_retry_seconds = max_retry_seconds
         self._sleep = sleep
@@ -156,15 +164,32 @@ class IndexingCoordinator:
         self._state = "running"
         self._started_at = datetime.now(UTC)
         self._finished_at = None
-        try:
-            report = await self._indexer.run()
-        except asyncio.CancelledError:
-            self._state, self._last_error = "failed", "cancelled"
-            raise
-        except Exception as exc:
-            self._state, self._last_error = "failed", f"{type(exc).__name__}: {exc}"
+        with bound(index_run_id, new_id()):  # correlates every log line of this run
+            try:
+                report = await self._indexer.run()
+            except asyncio.CancelledError:
+                self._state, self._last_error = "failed", "cancelled"
+                raise
+            except Exception as exc:
+                self._state, self._last_error = "failed", f"{type(exc).__name__}: {exc}"
+                self._finished_at = datetime.now(UTC)
+                logger.warning("Indexing failed: %s", self._last_error)
+                self._notify_failure(exc)
+                raise
+            self._state, self._last_error, self._last_report = "succeeded", None, report
             self._finished_at = datetime.now(UTC)
-            logger.warning("Indexing failed: %s", self._last_error)
-            raise
-        self._state, self._last_error, self._last_report = "succeeded", None, report
-        self._finished_at = datetime.now(UTC)
+            await self._notify_report(report)
+
+    async def _notify_report(self, report: IndexReport) -> None:
+        if self._on_report is not None:
+            try:
+                await self._on_report(report)
+            except Exception:
+                logger.exception("Index report observer failed")
+
+    def _notify_failure(self, exc: Exception) -> None:
+        if self._on_failure is not None:
+            try:
+                self._on_failure(exc)
+            except Exception:
+                logger.exception("Index failure observer failed")

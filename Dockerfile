@@ -54,4 +54,5 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
 
 # Migrations run first; the entrypoint then execs CMD so uvicorn stays PID 1.
 ENTRYPOINT ["easyrag-entrypoint"]
-CMD ["uvicorn", "--factory", "easyrag.main:create_app", "--host", "0.0.0.0", "--port", "8000"]
+# --no-access-log: the app logs one structured line per request (with its request ID).
+CMD ["uvicorn", "--factory", "easyrag.main:create_app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log"]

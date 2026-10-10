@@ -30,6 +30,8 @@ class Settings(BaseSettings):
     )
 
     log_level: Annotated[LogLevel, BeforeValidator(_upper)] = "INFO"
+    # json: one JSON object per line (for log collectors); text: human-readable.
+    log_format: Literal["json", "text"] = "json"
 
     # SQLAlchemy URL, e.g. postgresql+psycopg://user:password@host:5432/dbname
     # Secret because it carries the password; never log it.

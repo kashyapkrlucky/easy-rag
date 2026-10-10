@@ -24,6 +24,7 @@ INFRASTRUCTURE = (
     "fastembed",
     "onnxruntime",
     "watchfiles",
+    "prometheus_client",
 )
 ADAPTERS = (
     "easyrag.ollama",

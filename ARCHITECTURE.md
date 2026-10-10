@@ -194,8 +194,10 @@ easy-rag/
 │   │   ├── citations.py              (P14) [n] markers, refusal detection
 │   │   └── attribution.py            (P14) server-side support check
 │   ├── observability/
-│   │   ├── logging.py                (P1 basic, structured in P20)
-│   │   └── metrics.py                (P20)
+│   │   ├── context.py                (P20) request_id / index_run_id contextvars
+│   │   ├── logging.py                (P1 basic, JSON in P20)
+│   │   ├── middleware.py             (P20) request ID, request log line, HTTP metrics
+│   │   └── metrics.py                (P20) per-app Prometheus registry
 │   ├── evaluation/                   (P19)
 │   │   ├── dataset.py                validated loading; labels checked against the corpus
 │   │   ├── metrics.py                pure metrics (ranks, key facts, citations, threshold)
@@ -1067,7 +1069,7 @@ numbers must match.
 | `GET /api/v1/documents` | 15 ✅ | Indexed documents: path, title, hash, size, chunk count, indexed_at |
 | `GET /api/v1/index/status` | 15–16 ✅ | State, pending follow-up, watcher state, last report, last error, startup attempts, counts |
 | `POST /api/v1/index` | 15 ✅ | Start an incremental run: 202, or 409 `index_running` |
-| `GET /metrics` | 20 | Prometheus metrics |
+| `GET /metrics` | 20 ✅ | Prometheus metrics (HTTP, errors, indexing, build info) |
 
 Chat contract (target):
 
@@ -1099,6 +1101,7 @@ Chat contract (target):
 | Variable | Default | Phase |
 |---|---|---|
 | `EASYRAG_LOG_LEVEL` | `INFO` | 1 |
+| `EASYRAG_LOG_FORMAT` | `json` (`text` for development) | 20 |
 | `EASYRAG_DATABASE_URL` | — (required) | 3 |
 | `EASYRAG_DOCS_DIR` | `docs` (Compose: `/data/docs`) | 9 |
 | `EASYRAG_DOCS_HOST_DIR` (Compose only) | `./docs`, mounted read-only | 9 |
@@ -1142,15 +1145,39 @@ The deterministic `FakeEmbeddingProvider` (hash-seeded vectors) and the scripted
 
 ---
 
-## 13. Observability (target)
+## 13. Observability
 
-- Structured JSON logs with `request_id` and `index_run_id`. Content is never logged at
-  INFO; questions are logged only at DEBUG.
-- `RagTrace` per request: stage timings (embed, retrieve, rerank, generate), prompt and
-  completion token counts (taken from Ollama's `prompt_eval_count` / `eval_count`),
-  retrieved chunk IDs + scores, prompt version, and model IDs.
-- Prometheus metrics: request latency histograms per stage, indexing counters
-  (documents scanned/changed/deleted, chunks embedded/reused), and provider error counters.
+*Implemented in Phase 20 (logging, request correlation, HTTP and indexing metrics); RAG
+stage histograms and token metrics follow in Phase 21.*
+
+- **Logs:** one JSON object per line (`EASYRAG_LOG_FORMAT=json`, the default; `text` for
+  development) with `timestamp`, `level`, `logger`, `message` and structured extras.
+  `request_id` and `index_run_id` come from contextvars and are attached to **every** line
+  written while handling that request or index run, including the HTTP client's calls to
+  Ollama. Uvicorn's loggers use the same handler, and its access log is replaced by one
+  structured line per request (`method`, `route`, `status`, `duration_ms`). Probes and
+  scrapes (`/health/*`, `/metrics`) are logged at DEBUG.
+- **Content policy:** no question or document text at INFO; questions only at DEBUG
+  (verified live).
+- **Request IDs:** an incoming `X-Request-ID` is honoured only if it matches
+  `[A-Za-z0-9._-]{1,64}`; otherwise a 16-hex ID is generated. Either way it's echoed in the
+  response header.
+- **Metrics:** `GET /metrics` in Prometheus text format, from a registry **owned by the
+  app instance** (not the global one), so tests and multiple instances stay independent.
+  - `easyrag_http_requests_total{method,route,status}` and
+    `easyrag_http_request_duration_seconds{method,route}`. The label is the route
+    **template**; unmatched paths become `unmatched`, so raw paths never create label
+    cardinality.
+  - `easyrag_api_errors_total{code}`: every mapped error response.
+  - `easyrag_index_runs_total{result}`, `easyrag_index_documents_total{change}`,
+    `easyrag_index_chunks_total{source=embedded|reused}`,
+    `easyrag_index_run_duration_seconds`, `easyrag_index_last_success_timestamp_seconds`,
+    `easyrag_indexed_documents`, `easyrag_indexed_chunks`.
+  - `easyrag_build_info{version,embedding_model,llm_model}`.
+- **Boundaries:** the indexing coordinator takes `on_report` / `on_failure` observers (with
+  failures in an observer logged, never propagated), so `ingestion/` doesn't depend on
+  `prometheus_client`. That's enforced by the architecture test.
+- `/metrics` is unauthenticated until Phase 22 and published on `127.0.0.1` only.
 
 ---
 

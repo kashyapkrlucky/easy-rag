@@ -10,17 +10,19 @@ from dataclasses import dataclass
 import httpx2
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from easyrag import __version__
 from easyrag.config import Settings
 from easyrag.embeddings.base import EmbeddingProvider
 from easyrag.embeddings.ollama import OllamaEmbeddingProvider
 from easyrag.health import CheckStatus, ReadinessCheck
 from easyrag.ingestion.chunker import Chunker, ChunkingConfig
 from easyrag.ingestion.coordinator import IndexingCoordinator
-from easyrag.ingestion.indexer import Indexer
+from easyrag.ingestion.indexer import Indexer, IndexReport
 from easyrag.ingestion.loader import FilesystemMarkdownLoader
 from easyrag.ingestion.markdown import MarkdownParser
 from easyrag.llm.base import GenerationOptions, LLMProvider
 from easyrag.llm.ollama import OllamaLLMProvider
+from easyrag.observability.metrics import Metrics
 from easyrag.rag.prompt import PromptBuilder
 from easyrag.rag.service import RagService
 from easyrag.rerankers.fastembed import FastEmbedReranker
@@ -57,6 +59,7 @@ class AppContainer:
     retrievers: Mapping[str, Retriever]
     reranker: FastEmbedReranker
     rag: RagService
+    metrics: Metrics
     # Reported by /health/ready, in this order.
     readiness_checks: Mapping[str, ReadinessCheck]
 
@@ -157,7 +160,20 @@ def build_container(settings: Settings) -> AppContainer:
         ungrounded_policy=settings.rag_ungrounded_policy,
     )
 
-    indexing = IndexingCoordinator(indexer)
+    metrics = Metrics()
+    metrics.build_info.labels(
+        version=__version__, embedding_model=embeddings.model_id, llm_model=llm.model_id
+    ).set(1)
+
+    async def record_index_run(report: IndexReport) -> None:
+        metrics.record_index_run(report)
+        metrics.record_index_size(*await index_store.counts())
+
+    indexing = IndexingCoordinator(
+        indexer,
+        on_report=record_index_run,
+        on_failure=lambda exc: metrics.record_index_failure(),
+    )
 
     async def database() -> CheckStatus:
         await ping(engine, settings.health_check_timeout_seconds)
@@ -190,6 +206,7 @@ def build_container(settings: Settings) -> AppContainer:
         retrievers=retrievers,
         reranker=reranker,
         rag=rag,
+        metrics=metrics,
         readiness_checks={
             "database": database,
             "schema": schema,

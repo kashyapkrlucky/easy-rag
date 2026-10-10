@@ -190,6 +190,8 @@ Decision references (D1–D24) point to [ARCHITECTURE.md §9](ARCHITECTURE.md#9-
 
 ### Phase 20 — Structured logging and metrics
 - **Objective:** JSON logs, request ID middleware, a Prometheus `/metrics` endpoint, and indexing counters.
+- **Done:** `observability/{context,logging,middleware,metrics}.py`, `/metrics` route, error counting, coordinator observers with `index_run_id`, `EASYRAG_LOG_FORMAT`, uvicorn `--no-access-log`; `prometheus-client` and `starlette` declared (the packaging guard caught the direct `starlette` import). Tests: JSON formatter (fields, extras, odd values, exceptions, context IDs, text mode); request ID generation/acceptance/rejection and propagation into pipeline logs; probes at DEBUG; metrics by route template (no raw-path labels); error counting; index metrics and independent registries; coordinator observers, per-run IDs and failure isolation. Live in Docker: every container log line is JSON; one chat request's 4 log lines share its ID; indexing metrics match the corpus (7 documents, 22 chunks).
+- **Status:** ✅ done
 - **Commit:** `feat: add structured logging and metrics`
 
 ### Phase 21 — Latency/token/retrieval observability

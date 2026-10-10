@@ -8,7 +8,9 @@ Database errors and unexpected exceptions get generic messages (details are logg
 never returned), so connection strings and stack traces cannot leak to clients.
 """
 
+import json
 import logging
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from fastapi import FastAPI, Request, status
@@ -23,6 +25,8 @@ from easyrag.ingestion.coordinator import IndexRunInProgressError
 from easyrag.llm.base import LLMProviderUnavailableError, LLMResponseError
 
 logger = logging.getLogger(__name__)
+
+Handler = Callable[[Request, Exception], Awaitable[JSONResponse]]
 
 
 def error_response(status_code: int, code: str, message: str, details: Any = None) -> JSONResponse:
@@ -96,13 +100,27 @@ async def _unexpected_error(request: Request, exc: Exception) -> JSONResponse:
     )
 
 
+def _counted(handler: Handler) -> Handler:
+    """Count every error response by code in easyrag_api_errors_total."""
+
+    async def wrapper(request: Request, exc: Exception) -> JSONResponse:
+        response = await handler(request, exc)
+        container = getattr(request.app.state, "container", None)
+        if container is not None:
+            code = json.loads(bytes(response.body))["error"]["code"]
+            container.metrics.api_errors.labels(code=code).inc()
+        return response
+
+    return wrapper
+
+
 def register_error_handlers(app: FastAPI) -> None:
-    app.add_exception_handler(RequestValidationError, _validation_error)
-    app.add_exception_handler(EmbeddingProviderUnavailableError, _embedding_unavailable)
-    app.add_exception_handler(EmbeddingResponseError, _embedding_response)
-    app.add_exception_handler(LLMProviderUnavailableError, _llm_unavailable)
-    app.add_exception_handler(LLMResponseError, _llm_response)
-    app.add_exception_handler(IndexIncompatibleError, _index_incompatible)
-    app.add_exception_handler(IndexRunInProgressError, _index_running)
-    app.add_exception_handler(DBAPIError, _database_error)
-    app.add_exception_handler(Exception, _unexpected_error)
+    app.add_exception_handler(RequestValidationError, _counted(_validation_error))
+    app.add_exception_handler(EmbeddingProviderUnavailableError, _counted(_embedding_unavailable))
+    app.add_exception_handler(EmbeddingResponseError, _counted(_embedding_response))
+    app.add_exception_handler(LLMProviderUnavailableError, _counted(_llm_unavailable))
+    app.add_exception_handler(LLMResponseError, _counted(_llm_response))
+    app.add_exception_handler(IndexIncompatibleError, _counted(_index_incompatible))
+    app.add_exception_handler(IndexRunInProgressError, _counted(_index_running))
+    app.add_exception_handler(DBAPIError, _counted(_database_error))
+    app.add_exception_handler(Exception, _counted(_unexpected_error))
