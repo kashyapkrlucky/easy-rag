@@ -8,7 +8,10 @@ backoff; 404 (model not pulled) and other 4xx responses fail immediately.
 """
 
 import asyncio
+import json
 import logging
+from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 import httpx2
@@ -93,6 +96,67 @@ async def show_model(client: httpx2.AsyncClient, model: str) -> dict[str, Any] |
         return None
     response.raise_for_status()
     return _json_object(response)
+
+
+@dataclass(frozen=True, slots=True)
+class PullProgress:
+    status: str
+    # Bytes over all layers seen so far; total is 0 until Ollama reports sizes.
+    completed: int
+    total: int
+
+
+async def pull_model(
+    client: httpx2.AsyncClient,
+    model: str,
+    on_progress: Callable[[PullProgress], None] | None = None,
+) -> None:
+    """Download ``model`` into Ollama (``/api/pull``, streamed), reporting progress.
+
+    Raises ``OllamaUnavailableError`` when Ollama can't be reached, and
+    ``OllamaRequestError`` when the pull fails (unknown model, no internet access, ...).
+    """
+    layers: dict[str, tuple[int, int]] = {}  # digest -> (completed, total)
+    try:
+        async with client.stream("POST", "/api/pull", json={"model": model}) as response:
+            if response.status_code != 200:
+                await response.aread()
+                raise OllamaRequestError(
+                    f"pulling {model!r} failed (HTTP {response.status_code}): "
+                    f"{error_message(response)}"
+                )
+            async for line in response.aiter_lines():
+                if not line.strip():
+                    continue
+                try:
+                    event = json.loads(line)
+                except ValueError as exc:
+                    raise OllamaRequestError("Ollama returned invalid pull progress") from exc
+                if not isinstance(event, dict):
+                    continue
+                if isinstance(event.get("error"), str):
+                    raise OllamaRequestError(f"pulling {model!r} failed: {event['error']}")
+                digest, total = event.get("digest"), event.get("total")
+                if isinstance(digest, str) and isinstance(total, int):
+                    layers[digest] = (int(event.get("completed") or 0), total)
+                status = str(event.get("status", ""))
+                if on_progress is not None:
+                    on_progress(
+                        PullProgress(
+                            status=status,
+                            completed=sum(done for done, _ in layers.values()),
+                            total=sum(size for _, size in layers.values()),
+                        )
+                    )
+                if status == "success":
+                    return
+    except httpx2.TimeoutException as exc:
+        raise OllamaUnavailableError(f"pulling {model!r} timed out") from exc
+    except httpx2.TransportError as exc:
+        raise OllamaUnavailableError(
+            f"cannot reach Ollama at {client.base_url} ({type(exc).__name__})"
+        ) from exc
+    raise OllamaRequestError(f"pulling {model!r} ended without success")
 
 
 def model_info_value(metadata: dict[str, Any], suffix: str) -> int | None:

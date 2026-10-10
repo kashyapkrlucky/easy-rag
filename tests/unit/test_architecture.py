@@ -37,6 +37,7 @@ ADAPTERS = (
     "easyrag.container",
     "easyrag.main",
     "easyrag.cli",
+    "easyrag.models",
     "easyrag.observability.metrics",
     "easyrag.observability.transport",
 )

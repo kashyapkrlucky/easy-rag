@@ -706,8 +706,9 @@ inference is CPU-only and slow.
 one-shot `ollama-pull` service that downloads `EASYRAG_EMBEDDING_MODEL` (a no-op when it's
 already present). Ollama isn't published to the host except via `docker-compose.dev.yml`.
 Measured on Apple silicon in Docker (CPU only): 64 chunks embed in about 2.9 s. Note the
-Ollama image is about 4.2 GB because it bundles GPU runtimes; Phase 24 should make the
-host-Ollama setup first-class.
+Ollama image is about 4.2 GB because it bundles GPU runtimes. *Phase 24* made the host
+setup first-class (`docker-compose.host-ollama.yml`) and replaced `ollama-pull` with
+in-app model pulling (D38).
 
 **D20 — File watching with a polling fallback.** Phase 16 uses `watchfiles` with
 debouncing. Bind-mounted volumes on Docker Desktop don't always deliver native file
@@ -783,8 +784,10 @@ SIGTERM shuts down gracefully. Compose publishes the API on `127.0.0.1` only; se
 `EASYRAG_API_KEY` before publishing it further (D36). Later phases needing writable paths add explicit volumes.
 
 **D26 — Database runtime and credentials (Phase 3).** `pgvector/pgvector:0.8.7-pg18-trixie`
-(PostgreSQL 18, pinned pgvector). `POSTGRES_PASSWORD` has no default: Compose refuses to start
-without it, and builds `EASYRAG_DATABASE_URL` from the `POSTGRES_*` variables. The app treats
+(PostgreSQL 18, pinned pgvector). *Since Phase 24 (D38)* the password is generated on first
+start into the `secrets` volume and passed to both containers as a file, so Compose needs no
+configuration. A `POSTGRES_PASSWORD` from `.env` still takes precedence, for existing
+databases. The app treats
 the URL as a `SecretStr`. The database is never published by the main compose file;
 `docker-compose.dev.yml` publishes it on `127.0.0.1` for integration tests and `psql`.
 Integration tests run only when `EASYRAG_TEST_DATABASE_URL` is set.
@@ -827,8 +830,8 @@ are load-bearing, and Phase 19 must measure faithfulness. Larger models and a na
 The shared HTTP plumbing now lives in `easyrag/ollama.py` (retries, error parsing,
 `/api/show`). Both adapters translate its neutral errors into their own port's errors.
 Readiness `llm_model` is `missing` until the model is pulled, and `misconfigured` if the
-model's native `context_length` is below the configured window. `ollama-pull` fetches both
-models.
+model's native `context_length` is below the configured window. Both models are pulled by
+the app (D38).
 
 
 **D29 — RAG orchestration and prompt v2 (Phase 13).**
@@ -1145,6 +1148,60 @@ numbers must match.
   headers, auth interplay, path traversal, disabling the UI, and static rules (no
   third-party URLs, no inline script, one submit button in the key dialog). A live check
   in a browser found the Enter-submits-Cancel bug that the last rule now guards against.
+
+**D38 — One-command deployment (Phase 24).**
+- **No mandatory configuration.** A one-shot `init` service (using the already-pulled
+  Postgres image, with no network) writes the DB password into the `secrets` volume. It
+  uses `POSTGRES_PASSWORD` from `.env` if set, because Postgres reads the password only
+  when it creates its data, so existing installations must keep theirs. Otherwise it
+  generates a random one, once.
+  - Postgres reads it via `POSTGRES_PASSWORD_FILE`. The app reads it via
+    `EASYRAG_DATABASE_PASSWORD_FILE`, which URL-quotes it into a URL that has no password
+    (any characters are allowed).
+  - Nothing secret is in container environments (`docker inspect`). The option is generic,
+    so it also works with Docker secrets.
+- **The app pulls its own models** (`ModelPuller`, `EASYRAG_OLLAMA_PULL_MODELS=true`).
+  - At startup it checks `/api/show` for each configured model and streams `/api/pull` for
+    missing ones. Progress is logged at most every 10 s, and readiness reports the model
+    as `pulling`. Ollama being down or the machine offline is retried with backoff (5 s up
+    to 5 min).
+  - This works the same with the bundled or a host Ollama, follows model changes in
+    `.env`, and replaces the 4 GB `ollama-pull` helper. `easyrag models pull` does it on
+    demand.
+  - Indexing needs no coupling: its startup retry (max 60 s) picks up the embedding model.
+  - Measured on a cold start: the embedding model was pulled and the 7-document corpus
+    indexed while the chat model (986 MB) was still downloading. It was ready after 56 s.
+- **Host Ollama is an override file, not a profile.** Profiles would need `.env` for the
+  default case to work. `docker-compose.host-ollama.yml` disables the bundled service (a
+  never-enabled profile) and points the app at `host.docker.internal` (`host-gateway`, so
+  Linux works too). `COMPOSE_FILE` in `.env` makes it the default. The app has no
+  `depends_on: ollama` so the override can remove it.
+- **Resources:**
+  - Configurable memory caps: Ollama 3 GB, app 1 GB, DB 1 GB. They're caps, not
+    reservations; measured use is 1.8 GB, 82 MB and 65 MB.
+  - Ollama: `OLLAMA_NUM_PARALLEL=1` (parallel slots multiply KV-cache memory),
+    `OLLAMA_MAX_LOADED_MODELS=2` (embedding + chat), and `OLLAMA_KEEP_ALIVE=1h` (no
+    ~10 s reload after a pause).
+  - Postgres: `shm_size: 256mb`, because the 64 MB default breaks parallel HNSW builds.
+  - Logs: rotated json-file logs (3 × 10 MB) for every service.
+- **`.env.example` sets nothing.** Every line is a commented default, with the common
+  settings first. A copied `.env` used to pin every default, so later default changes
+  (such as a better model) never reached those users. Tests keep it in sync with
+  `Settings` both ways, check that every example parses when uncommented, and check that
+  nothing is set.
+- **Upgrades rest on the data model:** the database holds only derived data. Migrations and
+  incremental re-indexing are automatic. For anything else, including a PostgreSQL major
+  version, the escape hatch is to delete the volume and re-index. The README has a table of
+  per-version actions.
+- **Compose invariants are tested:**
+  - no required variables;
+  - localhost-only ports;
+  - bounded logs and memory limits;
+  - the password passed as a file;
+  - a hardened app container;
+  - no dependency on `ollama`;
+  - all three file combinations valid under `docker compose config` with an empty
+    environment (skipped without Docker).
 ---
 
 ## 10. API surface (target)
@@ -1221,6 +1278,9 @@ Chat contract (target):
 | `EASYRAG_CORS_ALLOW_ORIGINS` | empty (CORS off; comma-separated origins) | 22 |
 | `EASYRAG_MAX_REQUEST_BYTES` | `65536` | 22 |
 | `EASYRAG_UI_ENABLED` | `true` | 23 |
+| `EASYRAG_DATABASE_PASSWORD_FILE` | unset (Compose: the generated password file) | 24 |
+| `EASYRAG_OLLAMA_PULL_MODELS` | `true` (pull missing models on start) | 24 |
+| `EASYRAG_{OLLAMA,APP,DB}_MEMORY_LIMIT` (Compose only) | `3g` / `1g` / `1g` | 24 |
 
 The exact model defaults are chosen and justified in Phases 8 and 12.
 

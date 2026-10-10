@@ -1,0 +1,25 @@
+# Use an Ollama running on the host instead of the bundled container: much faster on macOS
+# (Docker can't use the Apple GPU) and on hosts with a GPU-enabled Ollama already set up.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.host-ollama.yml up -d
+#
+# or, to make it the default for plain `docker compose` commands, add to .env:
+#
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.host-ollama.yml
+#
+# The app pulls missing models into the host's Ollama (EASYRAG_OLLAMA_PULL_MODELS).
+# Linux: Ollama listens on 127.0.0.1 by default, which containers can't reach. Start it
+# with OLLAMA_HOST=0.0.0.0 and firewall port 11434 from other machines, or point
+# EASYRAG_OLLAMA_BASE_URL at an address the container can reach.
+
+services:
+  ollama:
+    # Assigning a profile that is never enabled keeps the bundled Ollama from starting.
+    profiles: [bundled-ollama]
+
+  app:
+    environment:
+      EASYRAG_OLLAMA_BASE_URL: ${EASYRAG_OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+    extra_hosts:
+      # Docker Desktop provides host.docker.internal; this makes it work on Linux too.
+      - "host.docker.internal:host-gateway"

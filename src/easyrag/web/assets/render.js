@@ -110,7 +110,13 @@ export function readinessProblems(checks) {
     index: "The document index is not ready (indexing may still be running).",
     reranker: "The reranker is still loading; answers work without it meanwhile.",
   };
+  const pulling = {
+    embedding_model: "The embedding model is downloading (first start); indexing follows.",
+    llm_model: "The chat model is downloading (first start); questions can be asked when it is done.",
+  };
   return Object.entries(checks || {})
     .filter(([, status]) => status !== "ok")
-    .map(([name, status]) => explain[name] || `${name}: ${status}`);
+    .map(([name, status]) =>
+      status === "pulling" && pulling[name] ? pulling[name] : explain[name] || `${name}: ${status}`,
+    );
 }

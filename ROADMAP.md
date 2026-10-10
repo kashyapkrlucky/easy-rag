@@ -214,6 +214,14 @@ Decision references (D1–D24) point to [ARCHITECTURE.md §9](ARCHITECTURE.md#9-
 
 ### Phase 24 — End-user Docker Compose
 - **Objective:** one-command startup, automatic model pull, a host-Ollama profile, sensible resource limits, `.env.example` polish, and upgrade notes.
+- **Done:**
+  - **Startup:** `docker compose up -d` needs no `.env`. A one-shot `init` service generates the DB password into a volume (or uses `POSTGRES_PASSWORD` for existing installs); `EASYRAG_DATABASE_PASSWORD_FILE` passes it, URL-quoted.
+  - **Models:** `ModelPuller` (`models.py`, streaming `pull_model`) pulls missing models in the background with backoff, readiness reports `pulling`, `EASYRAG_OLLAMA_PULL_MODELS`, `easyrag models pull`; `ollama-pull` removed.
+  - **Compose:** `docker-compose.host-ollama.yml` (override file rather than a profile); memory limits; Ollama keep-alive / parallel / loaded-models settings; Postgres `shm_size`; rotated logs.
+  - **Docs:** `.env.example` rewritten (sets nothing, common settings first, documents the previously missing `EASYRAG_RETRIEVAL_MIN_SCORE`); README quick start, configuration, host Ollama, upgrading and data sections; UI banner explains downloads (D38).
+- **Tests:** pull progress, stream errors, truncation, HTTP and connection failures; puller pulls only missing models, deduplicates, backs off (exponential and capped), reports `pulling`, and starts only when enabled; password file (quoting, errors, URL preserved); 13 Compose and `.env.example` invariants, including `docker compose config` on all three file combinations with an empty environment and a mutation check.
+- **Live, as a fresh project without `.env`:** password generated; embedding model pulled and corpus indexed while the chat model (986 MB) downloaded, ready in about 1 minute; grounded answer with a citation; limits, log rotation and `shm` applied; no password in container environments; a second start reused the password and pulled nothing. The host-Ollama override was validated by `config` only (no host Ollama on this machine).
+- **Status:** ✅ done
 - **Commit:** `feat: streamline Docker Compose deployment`
 
 ### Phase 25 — Documentation, examples, benchmarks, hardening

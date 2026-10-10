@@ -5,6 +5,7 @@
                              the embedding model)
     easyrag eval DATASET     evaluate retrieval and answers on a labelled dataset, in an
                              isolated database (never touches your index)
+    easyrag models pull      pull the configured embedding and chat models into Ollama
 
 Exit codes: 0 success, 1 some documents failed, 2 configuration problem,
 3 a dependency (embedding model) is unavailable.
@@ -17,12 +18,15 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
+import httpx2
+
 from easyrag.config import Settings
 from easyrag.container import build_container
 from easyrag.domain.errors import IndexIncompatibleError
 from easyrag.embeddings.base import EmbeddingProviderUnavailableError
 from easyrag.ingestion.indexer import IndexReport
 from easyrag.observability.logging import configure_logging
+from easyrag.ollama import OllamaError
 
 EXIT_OK = 0
 EXIT_DOCUMENTS_FAILED = 1
@@ -48,13 +52,30 @@ def main(argv: Sequence[str] | None = None) -> int:
     evaluate.add_argument(
         "--keep-database", action="store_true", help="keep the isolated evaluation database"
     )
+    models = commands.add_parser("models", help="manage the Ollama models")
+    models.add_argument("action", choices=["pull"], help="pull missing configured models")
     arguments = parser.parse_args(argv)
 
     settings = Settings()
     configure_logging(settings.log_level)
+    if arguments.command == "models":
+        return asyncio.run(_pull_models(settings))
     if arguments.command == "eval":
         return asyncio.run(_evaluate(settings, arguments))
     return asyncio.run(_index(settings, rebuild=arguments.rebuild))
+
+
+async def _pull_models(settings: Settings) -> int:
+    container = build_container(settings)
+    try:
+        await container.models.ensure_all()
+    except (OllamaError, httpx2.HTTPError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_UNAVAILABLE
+    finally:
+        await container.aclose()
+    print(f"models present: {settings.embedding_model}, {settings.llm_model}")
+    return EXIT_OK
 
 
 async def _evaluate(settings: Settings, arguments: argparse.Namespace) -> int:

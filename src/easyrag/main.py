@@ -55,6 +55,8 @@ def create_app(
             )
         container = container_factory(resolved)
         app.state.container = container
+        if resolved.ollama_pull_models:
+            container.models.start()
         if resolved.index_on_startup:
             container.indexing.start_until_success()
         if resolved.watch_enabled:

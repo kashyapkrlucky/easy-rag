@@ -4,7 +4,7 @@ A self-hosted, local-first Retrieval-Augmented Generation system for your Markdo
 documents. It runs entirely on your machine — Python, FastAPI, PostgreSQL + pgvector and
 Ollama — with no external SaaS.
 
-> **Status: Phase 23 — web UI.** A chat page at http://localhost:8000 with clickable sources, on top of the API, authentication and observability. Measured baseline: 77% of answerable questions answered correctly with citations, 88% of unanswerable ones refused (`easyrag eval`). Prompt injection is not yet defended.
+> **Status: Phase 24 — one-command deployment.** `docker compose up -d` with no configuration: models download automatically, and a host Ollama is one line in `.env`. Measured baseline: 77% of answerable questions answered correctly with citations, 88% of unanswerable ones refused (`easyrag eval`). Prompt injection is not yet defended.
 > See [ROADMAP.md](ROADMAP.md) for progress.
 
 ## What it will do
@@ -44,29 +44,73 @@ answer, EasyRAG says it doesn't know instead of guessing.
 - [ARCHITECTURE.md](ARCHITECTURE.md): components, data flow, data model and design decisions
 - [ROADMAP.md](ROADMAP.md): the phased development plan
 
-## Running with Docker
+## Quick start
+
+Requirements: Docker with Compose v2.24 or later (Docker Desktop includes it), and 4 GB of
+memory for Docker.
 
 ```bash
-cp .env.example .env                                # then set POSTGRES_PASSWORD in .env
-docker compose up --build -d
-curl http://localhost:8000/health/live              # {"status":"ok"}
-curl http://localhost:8000/health/ready             # {"status":"ready","checks":{...all "ok"}}
-docker compose down                                 # add -v to also delete the database volume
+git clone <this repository> easyrag && cd easyrag
+cp -r ~/my-notes/*.md docs/          # or set EASYRAG_DOCS_HOST_DIR in .env (see below)
+docker compose up -d
 ```
 
-Database migrations are applied automatically each time the app container starts.
-On first start, `ollama-pull` downloads the embedding model (`nomic-embed-text:v1.5`,
-~274 MB) and the chat model (`qwen2.5:1.5b-instruct-q4_K_M`, ~1 GB). Until they're
-present, readiness reports them as `"missing"`.
+Open **http://localhost:8000** and ask a question. No configuration is needed.
+
+On first start, EasyRAG:
+- generates a database password, stored in a Docker volume;
+- downloads the embedding model (`nomic-embed-text:v1.5`, ~274 MB) and the chat model
+  (`qwen2.5:1.5b-instruct-q4_K_M`, ~1 GB). On a typical connection this takes a minute or
+  two. Indexing starts as soon as the embedding model is there;
+- indexes your documents, and keeps watching them for changes.
+
+Progress is in the logs (`docker compose logs -f app`) and at
+`curl localhost:8000/health/ready`, which shows models as `"pulling"` until they're done.
+The web page shows the same as a banner.
+
+```bash
+docker compose ps                    # all services "healthy"
+docker compose logs -f app           # what EasyRAG is doing (JSON lines)
+docker compose down                  # stop (data is kept; `down -v` deletes it)
+```
+
+### Configuration
+
+Optional. Copy `.env.example` to `.env` and uncomment what you need. The most common:
+
+| Setting | Default | |
+|---|---|---|
+| `EASYRAG_DOCS_HOST_DIR` | `./docs` | Your Markdown folder (mounted read-only) |
+| `EASYRAG_PORT` | `8000` | Port on `127.0.0.1` |
+| `EASYRAG_API_KEY` | unset | Required before exposing EasyRAG beyond your machine (see [Security](#security)) |
+| `EASYRAG_LLM_MODEL` | `qwen2.5:1.5b-instruct-q4_K_M` | Larger models answer better and need more memory |
+| `EASYRAG_OLLAMA_MEMORY_LIMIT` | `3g` | Raise it with the model size |
+
+Then apply the changes with `docker compose up -d`. A changed model is downloaded
+automatically.
 
 **Memory:** the defaults fit a 4 GB Docker VM (Docker Desktop's default on an 8 GB Mac).
-Larger chat models answer better but need more memory: CPU inference needs roughly 1.6×
-the model's size. See `.env.example` for alternatives.
+Each service has a memory limit (Ollama 3 GB, app 1 GB, database 1 GB), so one runaway
+can't starve the others. These are upper limits, not reservations. Container logs are
+rotated (3 × 10 MB per service).
 
-**macOS:** Docker can't use the Apple GPU, so the bundled Ollama runs on CPU (and its image
-is ~4 GB). If you have [Ollama](https://ollama.com) installed natively, it's much faster:
-run `ollama pull nomic-embed-text:v1.5` and set
-`EASYRAG_OLLAMA_BASE_URL=http://host.docker.internal:11434` in `.env`.
+### Using Ollama on the host (faster on macOS)
+
+Docker can't use the Apple GPU, so the bundled Ollama runs on the CPU (its image is also
+~4 GB). If you have [Ollama](https://ollama.com) installed natively, use it instead by
+adding one line to `.env`:
+
+```bash
+echo 'COMPOSE_FILE=docker-compose.yml:docker-compose.host-ollama.yml' >> .env
+docker compose up -d --remove-orphans          # stops the bundled Ollama
+```
+
+EasyRAG downloads the models into your Ollama on start. On Linux, Ollama must listen on an
+address containers can reach (`OLLAMA_HOST=0.0.0.0`; firewall port 11434). See
+[docker-compose.host-ollama.yml](docker-compose.host-ollama.yml).
+
+**Offline or curated Ollama:** set `EASYRAG_OLLAMA_PULL_MODELS=false`, and pull the models
+yourself (`ollama pull <model>`, or `docker compose run --rm app easyrag models pull`).
 
 ### Indexing your documents
 
@@ -230,6 +274,52 @@ curl -s localhost:8000/api/v1/documents -H "X-API-Key: $EASYRAG_API_KEY"
   `EASYRAG_CORS_ALLOW_ORIGINS` (comma-separated). CORS is off by default.
 - Without a key, the app logs a warning at startup.
 
+## Upgrading
+
+```bash
+git pull
+docker compose up -d --build
+```
+
+That's all for most upgrades:
+- **Database migrations** run automatically when the app starts.
+- **The index** is updated incrementally. If a new version changes how documents are
+  parsed or chunked, the affected documents are re-embedded on the first run. That's
+  automatic, but takes a while on large corpora.
+- **New default models** apply only to settings you haven't set in `.env`, and are
+  downloaded automatically.
+- **Images are pinned** (PostgreSQL, pgvector, Ollama) and change only with an EasyRAG
+  release, after testing.
+
+When something needs your action, it's listed here:
+
+| Version | Action |
+|---|---|
+| Phase 24 | The database password is now generated automatically. **Existing installations:** keep `POSTGRES_PASSWORD` in `.env`; it's still used and must match the existing database. The `ollama-pull` service is gone (the app pulls models); run `docker compose up -d --remove-orphans` once. Your copied `.env` may pin every old default: compare it with the new `.env.example`, which sets nothing. |
+
+**Changing the embedding model** needs a full rebuild, because vectors from different
+models can't be mixed:
+
+```bash
+docker compose run --rm app easyrag index --rebuild
+```
+
+### Your data
+
+The database holds **only derived data**: the index of your documents. Your Markdown
+files are the source of truth and are never modified. So no backup is needed, and the
+escape hatch for any problem, including a PostgreSQL major-version upgrade, is to delete
+the index and rebuild it:
+
+```bash
+docker compose down
+docker volume rm easyrag_pgdata easyrag_secrets     # the index and its password
+docker compose up -d                                 # re-indexes everything
+```
+
+Downloaded models (`easyrag_ollama`, `easyrag_models`) are kept, so this costs only the
+re-embedding time.
+
 ## Development
 
 Requirements: [uv](https://docs.astral.sh/uv/) (it installs Python 3.13 if needed).
@@ -241,7 +331,9 @@ uv run uvicorn --factory easyrag.main:create_app --reload
 curl http://localhost:8000/health/live              # {"status":"ok"}
 ```
 
-The app needs a database even outside Docker. Start one and point the app at it:
+The app needs a database even outside Docker. Start one and point the app at it. For
+development, set your own `POSTGRES_PASSWORD` in `.env` *before the first start*, so you
+know it:
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d db
@@ -264,7 +356,8 @@ Integration tests run against the development database when `EASYRAG_TEST_DATABA
 and end-to-end tests against a real Ollama when `EASYRAG_TEST_OLLAMA_URL` is set:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d db ollama ollama-pull
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d db ollama
+EASYRAG_OLLAMA_BASE_URL=http://127.0.0.1:11434 uv run easyrag models pull   # once
 EASYRAG_TEST_DATABASE_URL=postgresql+psycopg://easyrag:<password>@127.0.0.1:5432/easyrag \
 EASYRAG_TEST_OLLAMA_URL=http://127.0.0.1:11434 uv run pytest
 ```
@@ -321,9 +414,10 @@ knowledge. It has 30 questions: factual, paraphrased, identifier-style, unanswer
 two with a planted prompt injection.
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d db ollama ollama-pull
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d db ollama
 export EASYRAG_DATABASE_URL=postgresql+psycopg://easyrag:<password>@127.0.0.1:5432/easyrag
 export EASYRAG_OLLAMA_BASE_URL=http://127.0.0.1:11434
+uv run easyrag models pull                                  # once
 uv run easyrag eval eval/datasets/nimbus --retrieval-only   # seconds: compares 6 retrieval configs
 uv run easyrag eval eval/datasets/nimbus                    # + answers with the real model (slow on CPU)
 ```

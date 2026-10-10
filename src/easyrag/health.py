@@ -12,7 +12,8 @@ from typing import Literal
 
 logger = logging.getLogger(__name__)
 
-CheckStatus = Literal["ok", "unavailable", "outdated", "missing", "misconfigured"]
+# pulling: a missing model is being downloaded (EASYRAG_OLLAMA_PULL_MODELS).
+CheckStatus = Literal["ok", "unavailable", "outdated", "missing", "pulling", "misconfigured"]
 ReadinessCheck = Callable[[], Awaitable[CheckStatus]]
 
 

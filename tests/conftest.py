@@ -26,6 +26,7 @@ def make_settings(monkeypatch: pytest.MonkeyPatch) -> SettingsFactory:
             "index_on_startup": False,
             "watch_enabled": False,
             "rerank_enabled": False,
+            "ollama_pull_models": False,
             **overrides,
         }
         return Settings(_env_file=None, **values)

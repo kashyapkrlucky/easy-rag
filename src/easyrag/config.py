@@ -7,7 +7,8 @@ the environment; everything else receives a ``Settings`` instance.
 
 import re
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
+from urllib.parse import quote, urlsplit, urlunsplit
 
 from pydantic import AfterValidator, AnyHttpUrl, BeforeValidator, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -28,6 +29,17 @@ def _split_commas(value: object) -> object:
     if isinstance(value, str):
         return [item.strip() for item in value.split(",") if item.strip()]
     return value
+
+
+def with_password(url: str, password: str) -> str:
+    """``url`` with ``password`` inserted (URL-quoted, so any characters are allowed)."""
+    parts = urlsplit(url)
+    if parts.password is not None:
+        raise ValueError("the database URL already contains a password; remove one of them")
+    if parts.username is None or parts.hostname is None:
+        raise ValueError("the database URL needs a user and host to add a password to")
+    netloc = f"{parts.username}:{quote(password, safe='')}@{parts.netloc.rpartition('@')[2]}"
+    return urlunsplit(parts._replace(netloc=netloc))
 
 
 _ORIGIN = re.compile(r"https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?|\*")
@@ -60,6 +72,9 @@ class Settings(BaseSettings):
     # SQLAlchemy URL, e.g. postgresql+psycopg://user:password@host:5432/dbname
     # Secret because it carries the password; never log it.
     database_url: SecretStr
+    # Read the password from this file instead (Docker Compose, Docker secrets); the URL
+    # must then have no password. Surrounding whitespace is ignored.
+    database_password_file: Path | None = None
 
     # Upper bound for each dependency check performed by /health/ready.
     health_check_timeout_seconds: float = Field(default=2.0, gt=0, le=30)
@@ -124,6 +139,9 @@ class Settings(BaseSettings):
     # Generous by default: the first request may have to load a model, and CPU-only
     # generation (e.g. Docker on macOS) of a few hundred tokens can take minutes.
     ollama_timeout_seconds: float = Field(default=300.0, gt=0, le=3600)
+    # Pull missing embedding and chat models through Ollama's API in the background at
+    # startup (works with the bundled or a host Ollama). Off for curated/air-gapped hosts.
+    ollama_pull_models: bool = True
 
     # --- Chat model ----------------------------------------------------------------------
     # Pin a tag. Default sized for small machines: ~1 GB, fits a 4 GB Docker VM alongside the
@@ -154,6 +172,24 @@ class Settings(BaseSettings):
     # expects these). Change them together with the model.
     embedding_query_prefix: str = "search_query: "
     embedding_document_prefix: str = "search_document: "
+
+    @model_validator(mode="before")
+    @classmethod
+    def _password_from_file(cls, data: Any) -> Any:
+        if not isinstance(data, dict) or not data.get("database_password_file"):
+            return data
+        url = data.get("database_url")
+        if url is None:
+            return data  # reported as a missing database_url
+        path = Path(data["database_password_file"])
+        try:
+            password = path.read_text(encoding="utf-8").strip()
+        except OSError as exc:
+            raise ValueError(f"cannot read database_password_file {path}: {exc.strerror}") from None
+        if not password:
+            raise ValueError(f"database_password_file {path} is empty")
+        raw = url.get_secret_value() if isinstance(url, SecretStr) else str(url)
+        return {**data, "database_url": with_password(raw, password)}
 
     @model_validator(mode="after")
     def _overlap_fits_chunk(self) -> "Settings":

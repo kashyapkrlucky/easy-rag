@@ -100,6 +100,12 @@ test("trace summary", () => {
   );
 });
 
+test("a model being pulled is explained as a download", () => {
+  assert.deepEqual(readinessProblems({ llm_model: "pulling" }), [
+    "The chat model is downloading (first start); questions can be asked when it is done.",
+  ]);
+});
+
 test("readiness problems list only failing checks", () => {
   assert.deepEqual(readinessProblems({ database: "ok", llm_model: "missing", custom: "bad" }), [
     "The chat model is not available yet (it may still be downloading).",

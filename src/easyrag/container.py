@@ -23,6 +23,7 @@ from easyrag.ingestion.loader import FilesystemMarkdownLoader
 from easyrag.ingestion.markdown import MarkdownParser
 from easyrag.llm.base import GenerationOptions, LLMProvider
 from easyrag.llm.ollama import OllamaLLMProvider
+from easyrag.models import ModelPuller
 from easyrag.observability.metrics import Metrics
 from easyrag.observability.transport import InstrumentedTransport
 from easyrag.rag.prompt import PromptBuilder
@@ -60,6 +61,7 @@ class AppContainer:
     retriever: Retriever
     retrievers: Mapping[str, Retriever]
     reranker: FastEmbedReranker
+    models: ModelPuller
     rag: RagService
     metrics: Metrics
     # Reported by /health/ready, in this order.
@@ -74,9 +76,10 @@ class AppContainer:
         )
 
     async def aclose(self) -> None:
-        # Stop event sources first, then indexing, then the clients indexing uses.
+        # Stop event sources first, then background work, then the clients they use.
         await self.watcher.aclose()
         await self.indexing.aclose()
+        await self.models.aclose()
         await self.reranker.aclose()
         await self.http_client.aclose()
         await self.engine.dispose()
@@ -107,6 +110,14 @@ def build_container(settings: Settings) -> AppContainer:
     llm = OllamaLLMProvider(
         http_client, model=settings.llm_model, context_window=settings.llm_context_window
     )
+
+    models = ModelPuller(http_client, [settings.embedding_model, settings.llm_model])
+
+    def while_pulling(model: str, check: ReadinessCheck) -> ReadinessCheck:
+        async def readiness() -> CheckStatus:
+            return "pulling" if models.is_pulling(model) else await check()
+
+        return readiness
 
     index_store = PostgresIndexStore(engine)
     indexer = Indexer(
@@ -213,13 +224,14 @@ def build_container(settings: Settings) -> AppContainer:
         retriever=retriever,
         retrievers=retrievers,
         reranker=reranker,
+        models=models,
         rag=rag,
         metrics=metrics,
         readiness_checks={
             "database": database,
             "schema": schema,
-            "embedding_model": embeddings.readiness,
-            "llm_model": llm.readiness,
+            "embedding_model": while_pulling(settings.embedding_model, embeddings.readiness),
+            "llm_model": while_pulling(settings.llm_model, llm.readiness),
             "index": index,
             **({"reranker": reranker.readiness} if settings.rerank_enabled else {}),
         },
