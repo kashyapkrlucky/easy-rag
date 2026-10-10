@@ -9,6 +9,7 @@ import time
 from prometheus_client import CollectorRegistry, Counter, Gauge, Histogram, generate_latest
 from prometheus_client.exposition import CONTENT_TYPE_LATEST
 
+from easyrag.domain.answers import Answer
 from easyrag.ingestion.indexer import IndexReport
 
 CONTENT_TYPE = CONTENT_TYPE_LATEST
@@ -16,6 +17,11 @@ CONTENT_TYPE = CONTENT_TYPE_LATEST
 # Seconds; spans fast API calls up to CPU-bound answer generation.
 _HTTP_BUCKETS = (0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120)
 _INDEX_BUCKETS = (0.1, 0.5, 1, 5, 15, 30, 60, 120, 300, 600, 1800)
+# Ranking scores: cosine and reranker probability (0-1) and RRF (~0.01-0.033).
+_SCORE_BUCKETS = (0.01, 0.015, 0.02, 0.025, 0.03, 0.035, 0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6,
+                  0.7, 0.8, 0.9, 1.0)  # fmt: skip
+_TOKEN_BUCKETS = (64, 128, 256, 512, 1024, 1536, 2048, 3072, 4096, 6144, 8192, 16384)
+_COUNT_BUCKETS = (0, 1, 2, 3, 4, 5, 6, 8, 10, 15, 20, 30, 50)
 
 
 class Metrics:
@@ -77,6 +83,69 @@ class Metrics:
             "easyrag_indexed_chunks", "Chunks currently in the index", registry=r
         )
 
+        # Question answering (recorded from each Answer's RagTrace).
+        self.rag_answers = Counter(
+            "easyrag_rag_answers_total", "Answers by pipeline outcome", ["outcome"], registry=r
+        )
+        self.rag_stage_duration = Histogram(
+            "easyrag_rag_stage_duration_seconds",
+            "Time spent per RAG stage (retrieval, generation, total)",
+            ["stage"],
+            buckets=_HTTP_BUCKETS,
+            registry=r,
+        )
+        self.llm_tokens = Counter(
+            "easyrag_llm_tokens_total",
+            "Tokens processed by the chat model, as reported by the backend",
+            ["kind"],
+            registry=r,
+        )
+        self.rag_prompt_tokens = Histogram(
+            "easyrag_rag_prompt_tokens",
+            "Prompt size per generation (backend count, else the estimate)",
+            buckets=_TOKEN_BUCKETS,
+            registry=r,
+        )
+        self.rag_chunks = Histogram(
+            "easyrag_rag_chunks",
+            "Chunks per answer: retrieved, included in the prompt, cited",
+            ["stage"],
+            buckets=_COUNT_BUCKETS,
+            registry=r,
+        )
+        self.retrieval_top_score = Histogram(
+            "easyrag_retrieval_top_score",
+            "Score of the best retrieved chunk per question, by retrieval configuration",
+            ["config"],
+            buckets=_SCORE_BUCKETS,
+            registry=r,
+        )
+        self.rag_citations = Counter(
+            "easyrag_rag_cited_answers_total",
+            "Answers with sources, by how sources were determined (explicit / inferred)",
+            ["attribution"],
+            registry=r,
+        )
+        self.rag_invalid_citations = Counter(
+            "easyrag_rag_invalid_citations_total",
+            "Citation markers dropped because they referred to no source",
+            registry=r,
+        )
+        self.rag_truncated = Counter(
+            "easyrag_rag_truncated_answers_total",
+            "Answers cut off by the output-token limit",
+            registry=r,
+        )
+        # Model backend (Ollama) HTTP calls, per attempt.
+        self.provider_duration = Histogram(
+            "easyrag_provider_request_duration_seconds",
+            "Model backend requests by endpoint and outcome (status code, timeout, "
+            "connect_error, error)",
+            ["operation", "outcome"],
+            buckets=_HTTP_BUCKETS,
+            registry=r,
+        )
+
     def render(self) -> bytes:
         return generate_latest(self.registry)
 
@@ -102,3 +171,29 @@ class Metrics:
     def record_index_size(self, documents: int, chunks: int) -> None:
         self.indexed_documents.set(documents)
         self.indexed_chunks.set(chunks)
+
+    def record_answer(self, answer: Answer, *, retrieval_config: str) -> None:
+        trace = answer.trace
+        self.rag_answers.labels(outcome=trace.outcome).inc()
+        self.rag_stage_duration.labels(stage="retrieval").observe(trace.retrieval_seconds)
+        self.rag_stage_duration.labels(stage="total").observe(trace.total_seconds)
+        if trace.llm_model is not None:  # the model was called
+            self.rag_stage_duration.labels(stage="generation").observe(trace.generation_seconds)
+            self.rag_prompt_tokens.observe(trace.prompt_tokens or trace.prompt_tokens_estimate)
+            if trace.prompt_tokens is not None:
+                self.llm_tokens.labels(kind="prompt").inc(trace.prompt_tokens)
+            if trace.completion_tokens is not None:
+                self.llm_tokens.labels(kind="completion").inc(trace.completion_tokens)
+        self.rag_chunks.labels(stage="retrieved").observe(len(trace.retrieved))
+        self.rag_chunks.labels(stage="included").observe(len(trace.included_chunk_ids))
+        self.rag_chunks.labels(stage="cited").observe(len(trace.cited_chunk_ids))
+        if trace.retrieved:
+            self.retrieval_top_score.labels(config=retrieval_config).observe(trace.retrieved[0][1])
+        if trace.attribution is not None:
+            self.rag_citations.labels(attribution=trace.attribution).inc()
+        self.rag_invalid_citations.inc(trace.invalid_citations)
+        if answer.truncated:
+            self.rag_truncated.inc()
+
+    def record_provider_request(self, operation: str, outcome: str, seconds: float) -> None:
+        self.provider_duration.labels(operation=operation, outcome=outcome).observe(seconds)

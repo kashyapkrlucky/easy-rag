@@ -1,3 +1,4 @@
+import json
 from dataclasses import replace
 from typing import Any
 
@@ -156,3 +157,25 @@ def test_errors_map_to_http_errors(
 
     assert response.status_code == status
     assert response.json()["error"]["code"] == code
+
+
+def test_chat_omits_the_trace_by_default(make_settings: SettingsFactory) -> None:
+    with client_with(make_settings(), StubRag(make_answer())) as client:
+        body = client.post("/api/v1/chat", json={"question": "q"}).json()
+
+    assert "trace" not in body
+
+
+def test_chat_returns_the_trace_on_request(make_settings: SettingsFactory) -> None:
+    with client_with(make_settings(), StubRag(make_answer())) as client:
+        body = client.post("/api/v1/chat", json={"question": "q", "debug": True}).json()
+
+    trace = body["trace"]
+    assert trace["outcome"] == "answered"
+    assert trace["retrieved"] == [{"chunk_id": "c" * 32, "score": 0.74}]
+    assert trace["cited_chunk_ids"] == ["c" * 32]
+    assert trace["prompt_tokens"] == 98 and trace["completion_tokens"] == 12
+    assert trace["total_ms"] == 1100.0
+    assert trace["reranked"] is False
+    assert trace["finish_reason"] == "stop"
+    assert "content" not in json.dumps(trace)  # ids and numbers only, never document text

@@ -196,6 +196,8 @@ Decision references (D1–D24) point to [ARCHITECTURE.md §9](ARCHITECTURE.md#9-
 
 ### Phase 21 — Latency/token/retrieval observability
 - **Objective:** export `RagTrace` data: per-stage histograms, token counters, retrieval score distributions; optional `debug` trace in the chat response.
+- **Done:** `RagService(on_answer=...)` observer wired to `Metrics.record_answer` (answers by outcome, stage durations, tokens, prompt-size and chunk-count histograms, top score by retrieval config, attribution, invalid citations, truncation); `observability/transport.py` times every Ollama call by endpoint and outcome; `RagTrace.reranked`; structured `rag` fields on the trace log line; `"debug": true` returns `trace` from `/api/v1/chat` (D35). Tests: metric recording (incl. RRF-scale buckets, no-evidence and estimate fallback), observer called and isolated, reranked flag, structured log without question text, transport outcomes (status, connect error, timeout, `other`), trace omitted by default and returned on request without text; two mutation checks. Live Docker check still to run (see the phase notes).
+- **Status:** ✅ done (live check pending)
 - **Commit:** `feat: add RAG pipeline observability`
 
 ### Phase 22 — Authentication and self-hosting config

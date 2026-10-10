@@ -4,7 +4,7 @@ A self-hosted, local-first Retrieval-Augmented Generation system for your Markdo
 documents. It runs entirely on your machine — Python, FastAPI, PostgreSQL + pgvector and
 Ollama — with no external SaaS.
 
-> **Status: Phase 20 — structured logging and metrics.** JSON logs with request IDs and a Prometheus `/metrics` endpoint. Measured baseline: 77% of answerable questions answered correctly with citations, 88% of unanswerable ones refused (`easyrag eval`). Prompt injection is not yet defended.
+> **Status: Phase 21 — RAG pipeline observability.** JSON logs with request IDs, Prometheus `/metrics` covering every pipeline stage, and an optional debug trace per answer. Measured baseline: 77% of answerable questions answered correctly with citations, 88% of unanswerable ones refused (`easyrag eval`). Prompt injection is not yet defended.
 > See [ROADMAP.md](ROADMAP.md) for progress.
 
 ## What it will do
@@ -256,8 +256,21 @@ docker compose logs app | grep '"request_id": "<id>"'   # everything one request
 curl -s localhost:8000/metrics                           # Prometheus format
 ```
 
-Metrics cover HTTP requests (by route and status), latency, API errors (by code), indexing
-runs, document and chunk changes, and index size.
+Metrics cover:
+- HTTP requests (by route and status), latency, and API errors (by code);
+- indexing runs, document and chunk changes, and index size;
+- answers by outcome, time per stage (retrieval, generation), tokens, prompt size, and the
+  best retrieval score per question;
+- every call to Ollama, by endpoint and outcome (including timeouts).
+
+To see why one answer came out as it did, add `"debug": true`. The response then includes
+a `trace` with the retrieved chunk ids and scores, which chunks were given to the model and
+cited, token counts and timings. It never includes document text.
+
+```bash
+curl -s localhost:8000/api/v1/chat -H 'Content-Type: application/json' \
+  -d '{"question": "What port do agents use?", "debug": true}' | jq .trace
+```
 
 ## Evaluating quality
 

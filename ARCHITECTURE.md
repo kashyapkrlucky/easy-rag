@@ -1056,6 +1056,31 @@ numbers must match.
      false negatives, so failures must be read, not just counted.
   4. Small sample: one question is 4.5 points on the answerable rate. Treat differences of
      one or two questions as noise.
+
+**D35 — RAG pipeline observability (Phase 21).**
+- **The pipeline reports through an observer.** `RagService(on_answer=...)` is called with
+  every `Answer`, the same pattern as the indexing coordinator (§13). The container turns
+  answers into metrics. `rag/` never imports `prometheus_client` (architecture test), and
+  a failing observer is logged, never propagated to the request.
+- **Model-backend latency is measured at the transport.** `InstrumentedTransport` wraps
+  the shared HTTP client's transport and times every attempt (retries included) by
+  endpoint and outcome. That separates embedding time from database time inside
+  "retrieval" and makes timeouts and outages visible, with no metrics code in the Ollama
+  adapters. Ollama answers non-streaming calls only when done, so time-to-headers is the
+  whole call.
+- **Score histograms are labelled by retrieval configuration** (`hybrid`,
+  `hybrid+rerank`, …). Cosine, RRF and reranker scores aren't comparable, so one histogram
+  for all of them would mean nothing. The label comes from the trace (`reranked`: whether
+  the scores actually are reranker scores), not from settings, so a reranker that's still
+  loading doesn't mislabel scores. The buckets resolve RRF's ~0.016–0.033 range.
+- **Prompt size is a histogram, token totals are counters.** Prompt size drives CPU
+  latency (D28), so its distribution shows whether `EASYRAG_RAG_MAX_CONTEXT_TOKENS` fits.
+  Totals are for capacity planning. Backend counts are preferred, and the estimate is the
+  fallback.
+- **The debug trace is opt-in per request** (`"debug": true`). It carries ids, scores,
+  outcome, attribution, tokens and timings, never document or question text. It's
+  available to every caller while the API is unauthenticated; Phase 22 decides whether to
+  restrict it.
 ---
 
 ## 10. API surface (target)
@@ -1065,11 +1090,11 @@ numbers must match.
 | `GET /health/live` | 1 | Liveness |
 | `GET /health/ready` | 3 (extended 8, 12) | Readiness: DB, migrations, model provider |
 | `POST /api/v1/retrieve` | 10, 17 ✅ | Retrieval only (debugging, evaluation); optional `mode` (vector / keyword / hybrid) |
-| `POST /api/v1/chat` | 13–14 ✅ | Question → `{answer, status, grounded, truncated, sources}`; `[k]` in the answer ⇔ `sources[k-1]` |
+| `POST /api/v1/chat` | 13–14, 21 ✅ | Question → `{answer, status, grounded, truncated, sources}`; `[k]` in the answer ⇔ `sources[k-1]`; `"debug": true` adds `trace` |
 | `GET /api/v1/documents` | 15 ✅ | Indexed documents: path, title, hash, size, chunk count, indexed_at |
 | `GET /api/v1/index/status` | 15–16 ✅ | State, pending follow-up, watcher state, last report, last error, startup attempts, counts |
 | `POST /api/v1/index` | 15 ✅ | Start an incremental run: 202, or 409 `index_running` |
-| `GET /metrics` | 20 ✅ | Prometheus metrics (HTTP, errors, indexing, build info) |
+| `GET /metrics` | 20–21 ✅ | Prometheus metrics (HTTP, errors, indexing, RAG stages, tokens, scores, model backend, build info) |
 
 Chat contract (target):
 
@@ -1147,8 +1172,8 @@ The deterministic `FakeEmbeddingProvider` (hash-seeded vectors) and the scripted
 
 ## 13. Observability
 
-*Implemented in Phase 20 (logging, request correlation, HTTP and indexing metrics); RAG
-stage histograms and token metrics follow in Phase 21.*
+*Implemented in Phase 20 (logging, request correlation, HTTP and indexing metrics) and
+Phase 21 (RAG pipeline, tokens, retrieval scores, model backend; D35).*
 
 - **Logs:** one JSON object per line (`EASYRAG_LOG_FORMAT=json`, the default; `text` for
   development) with `timestamp`, `level`, `logger`, `message` and structured extras.
@@ -1174,6 +1199,19 @@ stage histograms and token metrics follow in Phase 21.*
     `easyrag_index_run_duration_seconds`, `easyrag_index_last_success_timestamp_seconds`,
     `easyrag_indexed_documents`, `easyrag_indexed_chunks`.
   - `easyrag_build_info{version,embedding_model,llm_model}`.
+  - RAG (one observation per answer): `easyrag_rag_answers_total{outcome}`,
+    `easyrag_rag_stage_duration_seconds{stage=retrieval|generation|total}` (generation
+    only when the model was called), `easyrag_llm_tokens_total{kind=prompt|completion}`,
+    `easyrag_rag_prompt_tokens`, `easyrag_rag_chunks{stage=retrieved|included|cited}`,
+    `easyrag_retrieval_top_score{config}`, `easyrag_rag_cited_answers_total{attribution}`,
+    `easyrag_rag_invalid_citations_total`, `easyrag_rag_truncated_answers_total`.
+  - Model backend: `easyrag_provider_request_duration_seconds{operation,outcome}`, where
+    `operation` is the Ollama endpoint (unknown paths become `other`) and `outcome` is the
+    status code, `timeout` or `connect_error`.
+- **RAG trace:** each answer logs one INFO line whose `rag` object holds the trace
+  (outcome, counts, top score, attribution, tokens, `*_ms` timings), so log tools can
+  filter on fields. `POST /api/v1/chat` with `"debug": true` returns the same trace, with
+  chunk ids and scores, in the response.
 - **Boundaries:** the indexing coordinator takes `on_report` / `on_failure` observers (with
   failures in an observer logged, never propagated), so `ingestion/` doesn't depend on
   `prometheus_client`. That's enforced by the architecture test.

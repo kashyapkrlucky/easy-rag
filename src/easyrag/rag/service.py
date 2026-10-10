@@ -16,7 +16,7 @@ Ollama, pgvector, HTTP or FastAPI (enforced by tests/unit/test_architecture.py).
 
 import logging
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Literal
 
 from easyrag.domain.answers import Answer, AnswerStatus, Outcome, RagTrace
@@ -34,6 +34,9 @@ logger = logging.getLogger(__name__)
 #   "flag"   — return it with status "ungrounded" (grounded=false).
 UngroundedPolicy = Literal["refuse", "flag"]
 
+# Called with every answer (e.g. to record metrics). Must not raise; errors are logged.
+AnswerObserver = Callable[[Answer], None]
+
 
 class RagService:
     def __init__(
@@ -44,12 +47,14 @@ class RagService:
         prompt_builder: PromptBuilder,
         generation_options: GenerationOptions,
         ungrounded_policy: UngroundedPolicy = "refuse",
+        on_answer: AnswerObserver | None = None,
     ) -> None:
         self._retriever = retriever
         self._llm = llm
         self._prompt_builder = prompt_builder
         self._generation_options = generation_options
         self._ungrounded_policy = ungrounded_policy
+        self._on_answer = on_answer
 
     async def answer(self, question: str, *, top_k: int | None = None) -> Answer:
         """Answer ``question`` from the indexed documents.
@@ -143,6 +148,7 @@ class RagService:
             retrieval_seconds=retrieved_at - started,
             generation_seconds=generated_at - retrieved_at,
             total_seconds=time.perf_counter() - started,
+            reranked=any(chunk.rerank_score is not None for chunk in retrieved),
         )
         _log(trace)
         logger.debug("Question: %r", question)  # user content only at DEBUG
@@ -152,7 +158,7 @@ class RagService:
                 self._ungrounded_policy,
                 invalid_citations,
             )
-        return Answer(
+        answer = Answer(
             question=question,
             text=text.strip(),
             status=status,
@@ -160,6 +166,12 @@ class RagService:
             truncated=generation is not None and generation.finish_reason == "length",
             trace=trace,
         )
+        if self._on_answer is not None:
+            try:
+                self._on_answer(answer)
+            except Exception:  # observability must never fail a request
+                logger.exception("Answer observer failed")
+        return answer
 
 
 def _log(trace: RagTrace) -> None:
@@ -183,4 +195,26 @@ def _log(trace: RagTrace) -> None:
         trace.retrieval_seconds,
         trace.generation_seconds,
         trace.total_seconds,
+        extra={
+            "rag": {
+                "outcome": trace.outcome,
+                "prompt_version": trace.prompt_version,
+                "llm_model": trace.llm_model,
+                "retrieved": len(trace.retrieved),
+                "reranked": trace.reranked,
+                "top_score": round(trace.retrieved[0][1], 6) if trace.retrieved else None,
+                "included": len(trace.included_chunk_ids),
+                "excluded": len(trace.excluded_chunk_ids),
+                "cited": len(trace.cited_chunk_ids),
+                "attribution": trace.attribution,
+                "invalid_citations": trace.invalid_citations,
+                "prompt_tokens": trace.prompt_tokens,
+                "prompt_tokens_estimate": trace.prompt_tokens_estimate,
+                "completion_tokens": trace.completion_tokens,
+                "finish_reason": trace.finish_reason,
+                "retrieval_ms": round(trace.retrieval_seconds * 1000, 1),
+                "generation_ms": round(trace.generation_seconds * 1000, 1),
+                "total_ms": round(trace.total_seconds * 1000, 1),
+            }
+        },
     )

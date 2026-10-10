@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from easyrag import __version__
 from easyrag.config import Settings
+from easyrag.domain.answers import Answer
 from easyrag.embeddings.base import EmbeddingProvider
 from easyrag.embeddings.ollama import OllamaEmbeddingProvider
 from easyrag.health import CheckStatus, ReadinessCheck
@@ -23,6 +24,7 @@ from easyrag.ingestion.markdown import MarkdownParser
 from easyrag.llm.base import GenerationOptions, LLMProvider
 from easyrag.llm.ollama import OllamaLLMProvider
 from easyrag.observability.metrics import Metrics
+from easyrag.observability.transport import InstrumentedTransport
 from easyrag.rag.prompt import PromptBuilder
 from easyrag.rag.service import RagService
 from easyrag.rerankers.fastembed import FastEmbedReranker
@@ -85,8 +87,10 @@ ContainerFactory = Callable[[Settings], AppContainer]
 
 def build_container(settings: Settings) -> AppContainer:
     engine = create_engine(settings)
+    metrics = Metrics()
     http_client = httpx2.AsyncClient(
         base_url=str(settings.ollama_base_url),
+        transport=InstrumentedTransport(httpx2.AsyncHTTPTransport(), metrics),
         timeout=httpx2.Timeout(
             settings.ollama_timeout_seconds, connect=_OLLAMA_CONNECT_TIMEOUT_SECONDS
         ),
@@ -144,6 +148,10 @@ def build_container(settings: Settings) -> AppContainer:
             default_top_k=settings.retrieval_top_k,
         )
 
+    def record_answer(answer: Answer) -> None:
+        config = settings.retrieval_mode + ("+rerank" if answer.trace.reranked else "")
+        metrics.record_answer(answer, retrieval_config=config)
+
     rag = RagService(
         retriever=retriever,
         llm=llm,
@@ -158,9 +166,9 @@ def build_container(settings: Settings) -> AppContainer:
             max_output_tokens=settings.llm_max_output_tokens,
         ),
         ungrounded_policy=settings.rag_ungrounded_policy,
+        on_answer=record_answer,
     )
 
-    metrics = Metrics()
     metrics.build_info.labels(
         version=__version__, embedding_model=embeddings.model_id, llm_model=llm.model_id
     ).set(1)

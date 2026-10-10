@@ -5,7 +5,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, StringConstraints
 
-from easyrag.domain.answers import Answer
+from easyrag.domain.answers import Answer, RagTrace
 from easyrag.domain.chunks import RetrievedChunk
 from easyrag.ingestion.coordinator import IndexStatus
 from easyrag.retrieval.vector import MAX_TOP_K
@@ -78,6 +78,9 @@ class RetrieveResponse(BaseModel):
 class ChatRequest(BaseModel):
     question: Query
     top_k: int | None = Field(default=None, ge=1, le=MAX_TOP_K)
+    debug: bool = Field(
+        default=False, description="Include the pipeline trace (ids, scores, timings, tokens)"
+    )
 
 
 class SourceResponse(BaseModel):
@@ -104,6 +107,58 @@ class SourceResponse(BaseModel):
         )
 
 
+class RetrievedScoreResponse(BaseModel):
+    chunk_id: str
+    score: float
+
+
+class TraceResponse(BaseModel):
+    """How an answer was produced. Contains no document text."""
+
+    outcome: str = Field(description="answered / refused / no_evidence / ungrounded")
+    prompt_version: str
+    llm_model: str | None = Field(description="None when the model was not called")
+    retrieved: list[RetrievedScoreResponse] = Field(description="Best first")
+    reranked: bool
+    included_chunk_ids: list[str] = Field(description="Chunks given to the model")
+    excluded_chunk_ids: list[str] = Field(description="Retrieved, but over the token budget")
+    cited_chunk_ids: list[str]
+    invalid_citations: int
+    attribution: str | None = Field(description="explicit ([n] markers) or inferred")
+    finish_reason: str | None
+    prompt_tokens: int | None
+    prompt_tokens_estimate: int
+    completion_tokens: int | None
+    retrieval_ms: float
+    generation_ms: float
+    total_ms: float
+
+    @classmethod
+    def from_domain(cls, trace: RagTrace) -> "TraceResponse":
+        return cls(
+            outcome=trace.outcome,
+            prompt_version=trace.prompt_version,
+            llm_model=trace.llm_model,
+            retrieved=[
+                RetrievedScoreResponse(chunk_id=chunk_id, score=round(score, 6))
+                for chunk_id, score in trace.retrieved
+            ],
+            reranked=trace.reranked,
+            included_chunk_ids=list(trace.included_chunk_ids),
+            excluded_chunk_ids=list(trace.excluded_chunk_ids),
+            cited_chunk_ids=list(trace.cited_chunk_ids),
+            invalid_citations=trace.invalid_citations,
+            attribution=trace.attribution,
+            finish_reason=trace.finish_reason,
+            prompt_tokens=trace.prompt_tokens,
+            prompt_tokens_estimate=trace.prompt_tokens_estimate,
+            completion_tokens=trace.completion_tokens,
+            retrieval_ms=round(trace.retrieval_seconds * 1000, 1),
+            generation_ms=round(trace.generation_seconds * 1000, 1),
+            total_ms=round(trace.total_seconds * 1000, 1),
+        )
+
+
 class ChatResponse(BaseModel):
     answer: str = Field(description='Answer text; "[k]" cites sources[k - 1]')
     status: Literal["answered", "insufficient_evidence", "ungrounded"] = Field(
@@ -113,16 +168,20 @@ class ChatResponse(BaseModel):
     grounded: bool = Field(description="False only when status is 'ungrounded'")
     truncated: bool = Field(description="True if the answer was cut off by the output limit")
     sources: list[SourceResponse] = Field(description="The cited document sections, in order")
+    trace: TraceResponse | None = Field(default=None, description='Only with "debug": true')
 
     @classmethod
-    def from_domain(cls, answer: Answer) -> "ChatResponse":
-        return cls(
+    def from_domain(cls, answer: Answer, *, debug: bool = False) -> "ChatResponse":
+        response = cls(
             answer=answer.text,
             status=answer.status,
             grounded=answer.grounded,
             truncated=answer.truncated,
             sources=[SourceResponse.from_domain(chunk) for chunk in answer.sources],
         )
+        if debug:  # set only on request: unset fields are omitted from the response
+            response.trace = TraceResponse.from_domain(answer.trace)
+        return response
 
 
 class IndexReportResponse(BaseModel):

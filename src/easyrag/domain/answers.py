@@ -47,6 +47,8 @@ class RagTrace:
     retrieval_seconds: float
     generation_seconds: float
     total_seconds: float
+    # True if the retrieved scores are reranker probabilities (reranking ran).
+    reranked: bool = False
 
 
 @dataclass(frozen=True, slots=True)
